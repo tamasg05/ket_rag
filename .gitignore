@@ -1,0 +1,32 @@
+# Secrets and local environments
+.env
+.venv/
+venv/
+
+# User specifications (both spellings are ignored)
+spec_demo.txt
+
+
+# Persistent, reproducible RAG artifacts
+.rag_cache/
+
+# Python/tooling output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+*.log
+.rag_build.*
+.gradio.*
