@@ -1,4 +1,4 @@
-# Three-RAG comparison prototype
+# Comparing Three RAG Approaches: A Python Prototype
 
 This annotated Python prototype compares:
 
@@ -48,14 +48,17 @@ settings requires a new persistent index and new API calls. Then enter a
 question and click **Compare answers**.
 
 The first KET-RAG build can take several minutes because it extracts the
-skeleton graph and then embeds entities, subchunks, and sentences. Progress is
-shown in the UI. Extraction is checkpointed after every batch, and embeddings
-are checkpointed periodically, so a stopped build can resume when the same
-corpus, models, and graph parameters are selected. Gemini is asked for
-schema-constrained JSON. If a multi-chunk response is malformed, truncated, or
-incomplete, the builder automatically retries those chunks one at a time and
-checkpoints every successful result. This fallback is slower, but it prevents
-one oversized response from aborting the complete build.
+skeleton graph and then embeds entities, relationships, subchunks, and
+sentences. Progress is shown in the UI. Extraction is checkpointed after every
+batch, and embeddings are checkpointed periodically, so a stopped build can
+resume when the same corpus, models, and graph parameters are selected.
+Existing indexes created before relationship embeddings were added are
+upgraded in place: only the missing relationship embeddings are created, and
+graph extraction is not repeated. Gemini is asked for schema-constrained JSON.
+If a multi-chunk response is malformed, truncated, or incomplete, the builder
+automatically retries those chunks one at a time and checkpoints every
+successful result. This fallback is slower, but it prevents one oversized
+response from aborting the complete build.
 
 The optional CLI builder is:
 
@@ -98,6 +101,9 @@ The prototype implements the central elements of KET-RAG:
 - A hybrid KNN graph with lexical and semantic neighbours.
 - PageRank-based selection of a `beta` fraction of core chunks.
 - LLM-based entity and relationship extraction only from the core chunks.
+- Descriptions and embeddings for both entities and relationships.
+- Skeleton retrieval ordered by entity, relationship, and supporting text
+  adjacency, following Algorithm 2.
 - Recursive splitting of each chunk into `2**tau` subchunks.
 - A keyword–subchunk bipartite graph.
 - Keyword vectors based on the average embeddings of relevant sentences.
@@ -108,9 +114,9 @@ The prototype implements the central elements of KET-RAG:
 | Area | Paper | Prototype | Likely consequence |
 |---|---|---|---|
 | Retrieval budget | Uses a token limit, `lambda`; the experimental default is 12,000 tokens. | Uses the number of chunks specified by `top-k`. | Long and short chunks count equally, so context size is less predictable and may contain less evidence. |
-| Skeleton graph | Entities and relationships are graph nodes with descriptions and embeddings. | Entities have embeddings, while relationships are simpler records without their own embeddings. | Relationship retrieval is less expressive and multi-hop reasoning may be weaker. |
+| Skeleton graph | Entities are nodes and relationships are graph edges; both have descriptions and embeddings. | Entity records and relationship-edge records both have descriptions and embeddings, but they are persisted as records, NumPy arrays, and source-chunk IDs rather than a fully navigable graph object. | Relationship semantics are retained, but explicit multi-hop graph traversal remains simpler than in a production graph index. |
 | Extraction limits | The paper does not specify fixed per-chunk entity and relationship limits. | Each core chunk is limited to at most 20 entities and 30 relationships. | Graph size and extraction cost are bounded, but dense chunks can lose lower-priority facts. |
-| Skeleton retrieval | Retrieves ten entity seeds, adjacency-ranked relationships, and then adjacent chunks under a token budget. | Retrieves at least three entity seeds, matching relationships, and semantically reranked source subchunks. | This simpler approximation may miss relevant relationships or exact details. |
+| Skeleton retrieval | Selects ten query-relevant entity seeds. Relationships are ranked by adjacency to those seeds, followed by adjacent supporting chunks, until the token budgets are filled. | Follows the same entity → relationship → text order. A relationship touching two entity seeds ranks above one touching a single seed. Supporting subchunks rank by their number of connections to the selected entities and relationships. If relationships or subchunks have equal adjacency scores, cosine similarity to the query breaks the tie. Fixed item counts replace token budgets. | Adjacency remains the primary ranking signal, but semantic tie-breaking and count limits can produce different context from the paper. |
 | Graph rewiring | Skeleton edges are rewired from the original chunks to the appropriate fine-grained subchunks. | Entities and relationships retain parent chunk IDs, which are expanded to their child subchunks. | An entity can become associated with every subchunk of its parent, introducing irrelevant context. |
 | Keyword vocabulary | All tokenized non-stopwords can become keywords. | All tokenized non-stopwords can become keywords, but a keyword must occur in at least two different subchunks. | Terms that occur in only one subchunk are absent from the keyword graph, which can affect questions about rare entities. |
 | Sentence processing | Uses NLTK sentence tokenization in the experiments. | Uses NLTK Punkt configured for common English titles and abbreviations, and retains only sentence fragments containing at least three tokenized words. | Uncommon abbreviations may still produce inaccurate boundaries, and shorter fragments do not contribute to keyword vectors. |
@@ -160,14 +166,16 @@ The prototype implements the central elements of KET-RAG:
 
 2. **Keyword lemmatization**
 
-   The current keyword vocabulary is case-insensitive, but it does not use
-   lemmatization. Inflected forms such as `investigate`, `investigated`, and
-   `investigating` are therefore separate keywords, and each form must occur in
-   at least two subchunks to be retained. A future version could lemmatize
-   non-stopword tokens before calculating their document frequency and building
-   keyword-to-subchunk edges. This could improve keyword coverage, but the
-   lemmatizer must match the corpus language and should preserve important
-   proper names and distinctions between genuinely different words.
+   The paper does not mention lemmatization, and the current prototype does not
+   use it. The keyword vocabulary is case-insensitive, but inflected forms such
+   as `investigate`, `investigated`, and `investigating` are separate keywords,
+   and each form must occur in at least two subchunks to be retained. A future
+   version could lemmatize non-stopword tokens before calculating their
+   document frequency and building keyword-to-subchunk edges. This could
+   improve keyword coverage, but it would be an extension beyond the method
+   explicitly documented in the paper. The lemmatizer must also match the
+   corpus language and should preserve important proper names and distinctions
+   between genuinely different words.
 
 3. **File-based persistence instead of a database**
 

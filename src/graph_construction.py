@@ -149,6 +149,25 @@ def build_skeleton_graph(
     return list(entities.values()), relations
 
 
+def format_relationship_text(relation: dict) -> str:
+    """
+    Create the textual relationship description used for embedding and prompts.
+
+    Inputs:
+        relation: Relationship record containing source, target, relation type,
+            and an optional description.
+
+    Returns:
+        One readable string describing the relationship and its evidence.
+    """
+    source = str(relation.get("source", "")).strip()
+    target = str(relation.get("target", "")).strip()
+    relation_name = str(relation.get("relation", "related to")).strip()
+    description = str(relation.get("description", "")).strip()
+    statement = f"{source} --[{relation_name or 'related to'}]--> {target}".strip()
+    return f"{statement}. {description}".strip() if description else statement
+
+
 def _keyword_tokens(text: str) -> list[str]:
     """
     Tokenize case-insensitively and remove English stopwords.

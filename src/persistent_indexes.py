@@ -21,6 +21,7 @@ from .graph_construction import (
     build_hybrid_knn,
     build_keyword_subchunk_graph,
     build_skeleton_graph,
+    format_relationship_text,
     select_core_chunks,
 )
 
@@ -113,6 +114,33 @@ class IndexStore:
         self.gemini = gemini
         self.root = settings.cache_dir / _source_key(settings)
 
+    def _embed_relationships(
+        self,
+        relations: list[dict],
+        ket_dir: Path,
+        progress: Progress | None,
+    ) -> np.ndarray:
+        """
+        Load or create one persistent embedding per relationship record.
+
+        Inputs:
+            relations: Skeleton relationship records in stable index order.
+            ket_dir: Directory containing this KET index's artifacts.
+            progress: Optional callback accepting status messages.
+
+        Returns:
+            A normalized embedding matrix aligned with ``relations``.
+        """
+        relation_texts = [
+            format_relationship_text(relation) for relation in relations
+        ]
+        _say(progress, f"Embedding {len(relation_texts)} skeleton relationships")
+        return self.gemini.embed_documents(
+            relation_texts,
+            progress,
+            ket_dir / "relationship_embeddings.npy",
+        )
+
     def ensure_base(self, progress: Progress | None = None) -> tuple[list[dict], np.ndarray]:
         """
         Load or create chunks and their persistent embeddings.
@@ -199,7 +227,24 @@ class IndexStore:
         if complete.exists() and arrays.exists():
             _say(progress, f"Loaded persistent KET-RAG index (k={k}, beta={beta}, tau={tau})")
             data = _read_json(complete)
-            data["arrays"] = dict(np.load(arrays))
+            with np.load(arrays) as saved:
+                loaded_arrays = {name: saved[name] for name in saved.files}
+
+            # Older prototype indexes did not embed relationships. Upgrade
+            # those arrays in place without repeating paid graph extraction.
+            relation_vectors = loaded_arrays.get("relation_vectors")
+            expected_shape = (
+                len(data["relations"]),
+                self.settings.embedding_dimensions,
+            )
+            if relation_vectors is None or relation_vectors.shape != expected_shape:
+                _say(progress, "Adding relationship embeddings to the existing index")
+                loaded_arrays["relation_vectors"] = self._embed_relationships(
+                    data["relations"], ket_dir, progress
+                )
+                np.savez_compressed(arrays, **loaded_arrays)
+                _say(progress, "Relationship embeddings saved")
+            data["arrays"] = loaded_arrays
             return data
 
         chunks, chunk_vectors, adjacency = self.ensure_knn(k, progress)
@@ -277,6 +322,9 @@ class IndexStore:
         entity_vectors = self.gemini.embed_documents(
             entity_texts, progress, ket_dir / "entity_embeddings.npy"
         )
+        relation_vectors = self._embed_relationships(
+            relations, ket_dir, progress
+        )
 
         # Algorithm 3 line 10: create 2**tau fine-grained subchunks.
         subchunks = split_chunks_by_tau(chunks, tau)
@@ -324,11 +372,13 @@ class IndexStore:
         np.savez_compressed(
             arrays,
             entity_vectors=entity_vectors,
+            relation_vectors=relation_vectors,
             subchunk_vectors=sub_vectors,
             keyword_vectors=keyword_vectors,
         )
         metadata["arrays"] = {
             "entity_vectors": entity_vectors,
+            "relation_vectors": relation_vectors,
             "subchunk_vectors": sub_vectors,
             "keyword_vectors": keyword_vectors,
         }

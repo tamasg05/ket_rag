@@ -6,7 +6,10 @@ import math
 
 import numpy as np
 
-from .graph_construction import top_indices
+from .graph_construction import format_relationship_text, top_indices
+
+
+SKELETON_ENTITY_SEED_COUNT = 10
 
 
 def serialise_chunks(chunks: list[dict], ids: list[int], label: str = "chunk") -> str:
@@ -108,7 +111,9 @@ def ket_retrieve(
 
     Unlike the paper's token budget lambda, this prototype divides a top-k
     subchunk count between the skeleton and keyword channels using theta.
-    Skeleton retrieval is also a simplified counterpart of KG-Retrieval.
+    Skeleton retrieval follows KG-Retrieval's entity -> relationship -> text
+    order. Relationship and text adjacency are the primary ranking signals;
+    cosine similarity breaks ties because this demo uses counts, not tokens.
 
     Inputs:
         index: Loaded KET metadata, graphs, mappings, and embedding arrays.
@@ -125,37 +130,97 @@ def ket_retrieve(
     subchunks = index["subchunks"]
 
     # Algorithm 4 line 1, adapted: retrieve from the skeleton channel.
-    skeleton_candidates: set[int] = set()
     entity_ids: list[int] = []
     skeleton_facts: list[str] = []
     relation_facts: list[str] = []
+    selected_relationships: list[dict] = []
     if skeleton_budget and len(index["entities"]):
-        entity_ids = top_indices(arrays["entity_vectors"] @ query, max(3, skeleton_budget))
+        # Algorithm 2 line 1: retrieve up to ten semantic entity seeds.
+        entity_ids = top_indices(
+            arrays["entity_vectors"] @ query,
+            min(SKELETON_ENTITY_SEED_COUNT, len(index["entities"])),
+        )
         parent_to_subs: dict[int, list[int]] = {}
         for sub in subchunks:
             parent_to_subs.setdefault(sub["parent_id"], []).append(sub["id"])
+
+        # Count direct chunk-to-entity connections. These counts implement the
+        # structural adjacency signal used by Algorithm 2 line 3.
+        parent_adjacency: dict[int, int] = {}
         for entity_id in entity_ids:
             entity = index["entities"][entity_id]
             description = " ".join(dict.fromkeys(entity["descriptions"]))
             skeleton_facts.append(f"Entity: {entity['name']} — {description}")
-            for parent_id in entity["chunk_ids"]:
-                skeleton_candidates.update(parent_to_subs.get(parent_id, []))
+            for parent_id in set(entity["chunk_ids"]):
+                parent_adjacency[parent_id] = parent_adjacency.get(parent_id, 0) + 1
+
+        # Algorithm 2 line 2: relationships touching two entity seeds have
+        # higher adjacency than relationships touching only one. The paper
+        # does not prescribe tie handling, so relationship-vector similarity
+        # to the query provides a stable semantic tie-breaker.
         seed_names = {index["entities"][i]["name"].casefold() for i in entity_ids}
-        for relation in index["relations"]:
+        relations = index["relations"]
+        relation_vectors = arrays.get("relation_vectors")
+        if len(relations) and (
+            relation_vectors is None or len(relation_vectors) != len(relations)
+        ):
+            raise ValueError(
+                "The KET index has no aligned relationship embeddings; "
+                "load/build the index again to upgrade it."
+            )
+        ranked_relationships: list[tuple[int, int, float]] = []
+        for relation_id, relation in enumerate(relations):
             source = str(relation.get("source", ""))
             target = str(relation.get("target", ""))
-            if source.casefold() in seed_names or target.casefold() in seed_names:
-                relation_name = relation.get("relation", "related to")
-                description = relation.get("description", "")
-                relation_facts.append(
-                    f"Relation: {source} —[{relation_name}]→ {target}. {description}".strip()
-                )
-                skeleton_candidates.update(
-                    parent_to_subs.get(int(relation.get("chunk_id", -1)), [])
-                )
+            adjacency_score = int(source.casefold() in seed_names) + int(
+                target.casefold() in seed_names
+            )
+            if not adjacency_score:
+                continue
+            semantic_score = float(relation_vectors[relation_id] @ query)
+            ranked_relationships.append(
+                (relation_id, adjacency_score, semantic_score)
+            )
+        ranked_relationships.sort(
+            key=lambda item: (item[1], item[2]),
+            reverse=True,
+        )
+
+        # The paper stops by token length. This count-based demonstration keeps
+        # a small relationship set proportional to the skeleton text budget.
+        relationship_limit = max(1, skeleton_budget * 3)
+        for relation_id, adjacency_score, semantic_score in ranked_relationships[
+            :relationship_limit
+        ]:
+            relation = relations[relation_id]
+            relation_facts.append(
+                f"Relation: {format_relationship_text(relation)}"
+            )
+            parent_id = int(relation.get("chunk_id", -1))
+            parent_adjacency[parent_id] = parent_adjacency.get(parent_id, 0) + 1
+            selected_relationships.append(
+                {
+                    "relation_id": relation_id,
+                    "source": str(relation.get("source", "")),
+                    "target": str(relation.get("target", "")),
+                    "adjacency_to_entity_seeds": adjacency_score,
+                    "query_similarity": semantic_score,
+                }
+            )
+
+        subchunk_adjacency: dict[int, int] = {}
+        for parent_id, adjacency_score in parent_adjacency.items():
+            for subchunk_id in parent_to_subs.get(parent_id, []):
+                subchunk_adjacency[subchunk_id] = adjacency_score
+
+        # Algorithm 2 line 3: adjacency to selected entities and relationships
+        # leads the ranking; semantic similarity resolves equal adjacency.
         skeleton_ids = sorted(
-            skeleton_candidates,
-            key=lambda i: float(arrays["subchunk_vectors"][i] @ query),
+            subchunk_adjacency,
+            key=lambda i: (
+                subchunk_adjacency[i],
+                float(arrays["subchunk_vectors"][i] @ query),
+            ),
             reverse=True,
         )[:skeleton_budget]
     else:
@@ -187,7 +252,7 @@ def ket_retrieve(
     if skeleton_facts or relation_facts:
         graph_context = (
             "[knowledge graph skeleton]\n"
-            + "\n".join(skeleton_facts + relation_facts[: max(6, skeleton_budget * 3)])
+            + "\n".join(skeleton_facts + relation_facts)
             + "\n\n"
         )
     # Algorithm 4 line 5: combine skeleton and keyword contexts.
@@ -203,6 +268,7 @@ def ket_retrieve(
         ],
         "skeleton_entity_seeds": [index["entities"][i]["name"] for i in entity_ids],
         "skeleton_relation_facts": relation_facts,
+        "skeleton_relationships": selected_relationships,
         "keyword_seeds": [index["keywords"][i] for i in keyword_ids],
     }
     return context, details

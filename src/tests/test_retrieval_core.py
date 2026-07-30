@@ -18,8 +18,10 @@ from src.graph_construction import (
     build_keyword_subchunk_graph,
     build_keyword_vocabulary,
     build_skeleton_graph,
+    format_relationship_text,
 )
 from src.retrieval_strategies import (
+    ket_retrieve,
     knn_retrieve,
     serialise_subchunks,
     text_retrieve,
@@ -95,6 +97,10 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(entities), 1)
         self.assertEqual(entities[0]["chunk_ids"], [2, 5])
         self.assertEqual(relations[0]["chunk_id"], 5)
+        self.assertEqual(
+            format_relationship_text(relations[0]),
+            "Holmes --[friend]--> Watson",
+        )
 
         keywords, memberships, vectors = build_keyword_subchunk_graph(
             [
@@ -129,6 +135,74 @@ class CoreTests(unittest.TestCase):
         ]
         context = serialise_subchunks(subchunks, [1])
         self.assertEqual(context, "[chunk 7, subchunk 1]\nsecond")
+
+    def test_ket_skeleton_ranks_relationship_and_text_adjacency(self):
+        entities = [
+            {
+                "name": f"Entity {i}",
+                "descriptions": [f"Description {i}"],
+                "chunk_ids": [0] if i in (0, 1) else [],
+            }
+            for i in range(11)
+        ]
+        entity_vectors = np.array(
+            [[1.0 - i * 0.01, 0.0] for i in range(10)] + [[-1.0, 0.0]],
+            dtype=np.float32,
+        )
+        relations = [
+            {
+                "source": "Entity 0",
+                "target": "Entity 1",
+                "relation": "two-seed relation",
+                "description": "Touches two selected entity seeds.",
+                "chunk_id": 0,
+            },
+            {
+                "source": "Entity 0",
+                "target": "Entity 10",
+                "relation": "one-seed relation",
+                "description": "Touches one selected entity seed.",
+                "chunk_id": 1,
+            },
+        ]
+        index = {
+            "entities": entities,
+            "relations": relations,
+            "subchunks": [
+                {"id": 0, "parent_id": 0, "text": "structurally stronger"},
+                {"id": 1, "parent_id": 1, "text": "semantically stronger"},
+            ],
+            "keywords": [],
+            "keyword_to_subchunks": [],
+            "arrays": {
+                "entity_vectors": entity_vectors,
+                # The one-seed relation is more semantically similar, but the
+                # two-seed relationship must rank first by adjacency.
+                "relation_vectors": np.array(
+                    [[0.0, 1.0], [1.0, 0.0]], dtype=np.float32
+                ),
+                "subchunk_vectors": np.array(
+                    [[0.0, 1.0], [1.0, 0.0]], dtype=np.float32
+                ),
+                "keyword_vectors": np.empty((0, 2), dtype=np.float32),
+            },
+        }
+
+        _, details = ket_retrieve(
+            index,
+            np.array([1.0, 0.0], dtype=np.float32),
+            top_k=2,
+            theta=1.0,
+        )
+
+        self.assertEqual(
+            [
+                item["adjacency_to_entity_seeds"]
+                for item in details["skeleton_relationships"]
+            ],
+            [2, 1],
+        )
+        self.assertEqual(details["subchunk_ids"], [0, 1])
 
     def test_hybrid_graph_and_retrievers(self):
         texts = ["red apple fruit", "green apple fruit", "train railway", "railway station"]
