@@ -180,6 +180,19 @@ The prototype implements the central elements of KET-RAG:
    version could use a vector or graph database when those capabilities are
    required.
 
+4. **Averaging different keyword contexts**
+
+   The prototype represents each keyword by averaging the embeddings of all
+   sentences containing it. It follows the KET-RAG approach represented by
+   Algorithm 3, line 13. This is simple and efficient, but a word may have
+   different meanings in different contexts. Their average may represent none
+   of those meanings particularly well and can reduce retrieval accuracy for
+   ambiguous keywords. A more advanced implementation could:
+
+   1. retain multiple contextual vectors for each keyword;
+   2. cluster the containing sentences by meaning and create one vector for
+      each cluster.
+
 ## KET-RAG reference
 
 ```bibtex
