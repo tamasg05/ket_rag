@@ -24,6 +24,11 @@ from .graph_construction import (
     format_relationship_text,
     select_core_chunks,
 )
+from .structured_corpus import (
+    STRUCTURED_CORPUS_VERSION,
+    chunk_structured_blocks,
+    load_structured_blocks,
+)
 
 
 Progress = Callable[[str], None]
@@ -87,12 +92,17 @@ def _source_key(settings: Settings) -> str:
     Returns:
         A short deterministic hexadecimal cache key.
     """
-    digest = hashlib.sha256(settings.data_file.read_bytes()).hexdigest()[:16]
+    source_digest = hashlib.sha256(settings.data_file.read_bytes())
+    if settings.structured_blocks_file:
+        source_digest.update(settings.structured_blocks_file.read_bytes())
+    digest = source_digest.hexdigest()[:16]
     identity = (
         f"{digest}|{settings.chunk_words}|{settings.chunk_overlap}|"
         f"{settings.embedding_model}|{settings.embedding_dimensions}|"
         f"{INDEX_FORMAT_VERSION}"
     )
+    if settings.structured_blocks_file:
+        identity += f"|structured:{STRUCTURED_CORPUS_VERSION}"
     return hashlib.sha256(identity.encode()).hexdigest()[:16]
 
 
@@ -157,12 +167,23 @@ class IndexStore:
             _say(progress, "Loaded persistent chunk embeddings")
             return _read_json(chunks_path), np.load(vectors_path)
 
-        _say(progress, "Chunking corpus")
-        chunks = chunk_words(
-            load_text_corpus(self.settings.data_file),
-            self.settings.chunk_words,
-            self.settings.chunk_overlap,
-        )
+        if self.settings.structured_blocks_file:
+            _say(progress, "Chunking structured corpus")
+            blocks = load_structured_blocks(self.settings.structured_blocks_file)
+            chunks = chunk_structured_blocks(
+                blocks,
+                self.settings.chunk_words,
+                self.settings.chunk_overlap,
+            )
+        else:
+            _say(progress, "Chunking text corpus")
+            chunks = chunk_words(
+                load_text_corpus(self.settings.data_file),
+                self.settings.chunk_words,
+                self.settings.chunk_overlap,
+            )
+        if not chunks:
+            raise ValueError("The selected corpus did not produce any text chunks.")
         vectors = self.gemini.embed_documents([c["text"] for c in chunks], progress)
         self.root.mkdir(parents=True, exist_ok=True)
         _write_json(chunks_path, chunks)
@@ -171,6 +192,11 @@ class IndexStore:
             self.root / "manifest.json",
             {
                 "source": str(self.settings.data_file),
+                "structured_blocks": (
+                    str(self.settings.structured_blocks_file)
+                    if self.settings.structured_blocks_file
+                    else None
+                ),
                 "chunk_words": self.settings.chunk_words,
                 "chunk_overlap": self.settings.chunk_overlap,
                 "embedding_model": self.settings.embedding_model,
@@ -265,7 +291,17 @@ class IndexStore:
         batch_size = self.settings.extraction_batch_size
         for start in range(0, len(missing), batch_size):
             ids = missing[start : start + batch_size]
-            payload = [{"chunk_id": i, "text": chunks[i]["text"]} for i in ids]
+            payload = [
+                {
+                    "chunk_id": i,
+                    "text": (
+                        chunks[i].get("source_text", chunks[i]["text"])
+                        if self.settings.structured_blocks_file
+                        else chunks[i]["text"]
+                    ),
+                }
+                for i in ids
+            ]
             _say(
                 progress,
                 f"Extracting skeleton chunks: "
@@ -303,7 +339,18 @@ class IndexStore:
                         f"{completed_extractions}/{len(core_ids)} completed",
                     )
                     extracted = self.gemini.extract_graph_batch(
-                        [{"chunk_id": chunk_id, "text": chunks[chunk_id]["text"]}]
+                        [
+                            {
+                                "chunk_id": chunk_id,
+                                "text": (
+                                    chunks[chunk_id].get(
+                                        "source_text", chunks[chunk_id]["text"]
+                                    )
+                                    if self.settings.structured_blocks_file
+                                    else chunks[chunk_id]["text"]
+                                ),
+                            }
+                        ]
                     )
                     records[str(chunk_id)] = extracted[0]
                     _write_json(checkpoint, records)

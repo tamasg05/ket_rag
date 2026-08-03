@@ -11,6 +11,7 @@ demo*
 # Persistent, reproducible RAG artifacts
 .rag_cache/
 data/url_corpora/
+data/pdf_corpora/
 
 # Python/tooling output
 __pycache__/

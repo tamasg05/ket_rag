@@ -25,20 +25,24 @@ from src.graph_construction import (
     build_skeleton_graph,
     format_relationship_text,
 )
+from src.pdf_corpus import _clean_pdf_table, parse_pdf_paths, pdf_request_key
 from src.retrieval_strategies import (
     ket_retrieve,
     knn_retrieve,
+    serialise_chunks,
     serialise_subchunks,
     text_retrieve,
 )
 from src.web_corpus import (
     WebPage,
+    extract_html_blocks,
     extract_html_text,
     fetch_html_pages,
     parse_url_list,
     save_web_corpus,
     url_request_key,
 )
+from src.structured_corpus import chunk_structured_blocks
 
 
 class CoreTests(unittest.TestCase):
@@ -118,7 +122,69 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("WEB PAGE", saved_text)
             sources = json.loads(saved.sources_path.read_text(encoding="utf-8"))
             self.assertEqual(sources[0]["requested_url"], pages[0].requested_url)
-            self.assertEqual(saved.page_count, 1)
+            self.assertEqual(saved.source_count, 1)
+            self.assertTrue(saved.blocks_path.exists())
+
+    def test_html_table_structure_and_row_aware_chunking(self):
+        _, blocks = extract_html_blocks(
+            """
+            <html><body><main><h1>Electrical limits</h1>
+            <table><caption>Operating range</caption><thead>
+            <tr><th rowspan="2">Parameter</th><th colspan="2">Limits</th></tr>
+            <tr><th>Minimum</th><th>Maximum</th></tr></thead><tbody>
+            <tr><td>Voltage</td><td>3.0 V</td><td>3.6 V</td></tr>
+            <tr><td>Current</td><td>1 A</td><td>2 A</td></tr>
+            </tbody></table></main></body></html>
+            """,
+            source_name="specification",
+            source_url="https://example.org/specification",
+        )
+        table = next(block for block in blocks if block["type"] == "table")
+        self.assertEqual(
+            table["headers"],
+            ["Parameter", "Limits > Minimum", "Limits > Maximum"],
+        )
+        chunks = chunk_structured_blocks([table], size=30, overlap=0)
+        self.assertTrue(chunks)
+        self.assertEqual(chunks[0]["block_type"], "table")
+        self.assertIn("Parameter = Voltage", chunks[0]["source_text"])
+        self.assertIn("Limits > Maximum = 3.6 V", chunks[0]["source_text"])
+
+        subchunks = split_chunks_by_tau(chunks, tau=1)
+        self.assertEqual(len(subchunks), 2)
+        self.assertIn("Parameter = Voltage", subchunks[0]["source_text"])
+        self.assertNotIn("Parameter = Current", subchunks[0]["source_text"])
+        self.assertIn("Parameter = Current", subchunks[1]["source_text"])
+        self.assertEqual(
+            [(subchunk["row_start"], subchunk["row_end"]) for subchunk in subchunks],
+            [(1, 1), (2, 2)],
+        )
+
+        wide_chunks = chunk_structured_blocks([table], size=12, overlap=0)
+        column_groups = {tuple(chunk["column_group"]) for chunk in wide_chunks}
+        self.assertGreater(len(column_groups), 1)
+        self.assertTrue(all(group[0] == "Parameter" for group in column_groups))
+        self.assertTrue(
+            all("Parameter =" in chunk["source_text"] for chunk in wide_chunks)
+        )
+
+    def test_pdf_upload_validation_and_table_normalization(self):
+        headers, rows = _clean_pdf_table(
+            [
+                ["Parameter", "Minimum", "Maximum"],
+                ["Voltage", "3.0 V", "3.6 V"],
+                ["Current", "1 A", "2 A"],
+            ]
+        )
+        self.assertEqual(headers, ["Parameter", "Minimum", "Maximum"])
+        self.assertEqual(rows[0], ["Voltage", "3.0 V", "3.6 V"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "specification.pdf"
+            path.write_bytes(b"%PDF-minimal-test")
+            parsed = parse_pdf_paths([str(path)], max_files=2, max_file_bytes=100)
+            self.assertEqual(parsed, [path.resolve()])
+            self.assertEqual(pdf_request_key(parsed), pdf_request_key(list(parsed)))
 
     def test_word_tokenizer_removes_punctuation(self):
         self.assertEqual(
@@ -226,6 +292,24 @@ class CoreTests(unittest.TestCase):
         ]
         context = serialise_subchunks(subchunks, [1])
         self.assertEqual(context, "[chunk 7, subchunk 1]\nsecond")
+
+    def test_structured_context_label_and_source_text(self):
+        context = serialise_chunks(
+            [
+                {
+                    "text": "normalized text",
+                    "source_text": "Parameter = Voltage; Maximum = 3.6 V",
+                    "source_name": "specification.pdf",
+                    "page": 4,
+                    "table_id": "limits",
+                    "row_start": 2,
+                    "row_end": 2,
+                }
+            ],
+            [0],
+        )
+        self.assertIn("source specification.pdf, page 4, table limits, rows 2-2", context)
+        self.assertIn("Parameter = Voltage; Maximum = 3.6 V", context)
 
     def test_ket_skeleton_ranks_relationship_and_text_adjacency(self):
         entities = [

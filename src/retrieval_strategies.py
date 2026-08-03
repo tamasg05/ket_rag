@@ -12,6 +12,30 @@ from .graph_construction import format_relationship_text, top_indices
 SKELETON_ENTITY_SEED_COUNT = 10
 
 
+def _source_suffix(item: dict) -> str:
+    """
+    Format optional source, page, and table provenance for a context label.
+
+    Inputs:
+        item: Chunk or subchunk dictionary.
+
+    Returns:
+        Empty text or a comma-prefixed provenance suffix.
+    """
+    values: list[str] = []
+    if item.get("source_name"):
+        values.append(f"source {item['source_name']}")
+    if item.get("page") is not None:
+        values.append(f"page {item['page']}")
+    if item.get("table_id"):
+        values.append(f"table {item['table_id']}")
+    if item.get("row_start") is not None:
+        row_start = item["row_start"]
+        row_end = item.get("row_end", row_start)
+        values.append(f"rows {row_start}-{row_end}")
+    return ", " + ", ".join(values) if values else ""
+
+
 def serialise_chunks(chunks: list[dict], ids: list[int], label: str = "chunk") -> str:
     """
     Format selected chunks as labelled text for the answer-generation prompt.
@@ -24,7 +48,11 @@ def serialise_chunks(chunks: list[dict], ids: list[int], label: str = "chunk") -
     Returns:
         One string containing the labelled selected chunks.
     """
-    return "\n\n".join(f"[{label} {i}]\n{chunks[i]['text']}" for i in ids)
+    return "\n\n".join(
+        f"[{label} {i}{_source_suffix(chunks[i])}]\n"
+        f"{chunks[i].get('source_text', chunks[i]['text'])}"
+        for i in ids
+    )
 
 
 def serialise_subchunks(subchunks: list[dict], ids: list[int]) -> str:
@@ -42,8 +70,9 @@ def serialise_subchunks(subchunks: list[dict], ids: list[int]) -> str:
     for subchunk_id in ids:
         subchunk = subchunks[subchunk_id]
         parts.append(
-            f"[chunk {subchunk['parent_id']}, subchunk {subchunk['id']}]\n"
-            f"{subchunk['text']}"
+            f"[chunk {subchunk['parent_id']}, subchunk {subchunk['id']}"
+            f"{_source_suffix(subchunk)}]\n"
+            f"{subchunk.get('source_text', subchunk['text'])}"
         )
     return "\n\n".join(parts)
 
@@ -263,6 +292,18 @@ def ket_retrieve(
             {
                 "chunk_id": subchunks[subchunk_id]["parent_id"],
                 "subchunk_id": subchunks[subchunk_id]["id"],
+                **{
+                    key: subchunks[subchunk_id][key]
+                    for key in (
+                        "source_name",
+                        "source_url",
+                        "page",
+                        "table_id",
+                        "row_start",
+                        "row_end",
+                    )
+                    if subchunks[subchunk_id].get(key) not in (None, "")
+                },
             }
             for subchunk_id in selected
         ],

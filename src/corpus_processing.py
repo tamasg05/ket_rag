@@ -158,6 +158,44 @@ def split_chunks_by_tau(chunks: list[dict], tau: int) -> list[dict]:
     pieces = 2**tau
     result: list[dict] = []
     for chunk in chunks:
+        inherited = {
+            key: value
+            for key, value in chunk.items()
+            if key
+            not in {
+                "id",
+                "text",
+                "source_text",
+                "table_prefix",
+                "table_row_texts",
+            }
+        }
+        table_rows = chunk.get("table_row_texts", [])
+        if table_rows:
+            prefix = chunk.get("table_prefix", "")
+            for part in range(pieces):
+                start = round(part * len(table_rows) / pieces)
+                end = round((part + 1) * len(table_rows) / pieces)
+                selected_rows = table_rows[start:end]
+                if not selected_rows:
+                    continue
+                source_text = "\n".join(
+                    value for value in (prefix, *selected_rows) if value
+                )
+                result.append(
+                    {
+                        "id": len(result),
+                        "parent_id": chunk["id"],
+                        "part": part,
+                        "text": " ".join(tokenize_words(source_text)),
+                        "source_text": source_text,
+                        **inherited,
+                        "row_start": int(chunk.get("row_start", 1)) + start,
+                        "row_end": int(chunk.get("row_start", 1)) + end - 1,
+                    }
+                )
+            continue
+
         words = tokenize_words(chunk["text"])
         source_text = chunk.get("source_text", chunk["text"])
         source_matches = list(_WORD_PATTERN.finditer(source_text))
@@ -175,6 +213,7 @@ def split_chunks_by_tau(chunks: list[dict], tau: int) -> list[dict]:
                         "source_text": _text_span(
                             source_text, source_matches, start, end
                         ),
+                        **inherited,
                     }
                 )
     return result

@@ -52,6 +52,8 @@ def build_indexes(
     tau,
     use_url_corpus,
     url_text,
+    use_pdf_corpus,
+    pdf_files,
     progress=gr.Progress(),
 ):
     """
@@ -64,6 +66,8 @@ def build_indexes(
         tau: KET subchunk-split slider value.
         use_url_corpus: URL-corpus checkbox value.
         url_text: Multiline URL textbox value.
+        use_pdf_corpus: PDF-corpus checkbox value.
+        pdf_files: Uploaded PDF file paths.
         progress: Gradio progress reporter supplied by the framework.
 
     Returns:
@@ -102,6 +106,8 @@ def build_indexes(
             report,
             bool(use_url_corpus),
             url_text,
+            bool(use_pdf_corpus),
+            pdf_files,
         )
         status = result + "\n" + "\n".join(messages[-4:])
         return status, gr.update(interactive=True)
@@ -134,6 +140,8 @@ def compare(
     theta,
     use_url_corpus,
     url_text,
+    use_pdf_corpus,
+    pdf_files,
 ):
     """
     Gradio callback that compares answers from the three loaded RAG systems.
@@ -149,6 +157,8 @@ def compare(
         theta: KET skeleton-retrieval-share slider value.
         use_url_corpus: URL-corpus checkbox value.
         url_text: Multiline URL textbox value.
+        use_pdf_corpus: PDF-corpus checkbox value.
+        pdf_files: Uploaded PDF file paths.
 
     Returns:
         Three answer strings and one retrieval-diagnostics dictionary.
@@ -165,6 +175,8 @@ def compare(
             theta,
             bool(use_url_corpus),
             url_text,
+            bool(use_pdf_corpus),
+            pdf_files,
         )
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
@@ -181,25 +193,49 @@ with gr.Blocks(title="Compare Three RAG Systems") as demo:
     )
 
     with gr.Accordion("Data corpus", open=True):
-        use_url_corpus = gr.Checkbox(
-            value=False,
-            label="Build the corpus from web-page URLs",
-            info=(
-                "When unchecked, the configured local text file in data/ is used."
-            ),
-        )
-        url_text = gr.Textbox(
-            label="HTML page URLs (one per line)",
-            placeholder=(
-                "https://example.org/page-one\n"
-                "https://example.org/page-two"
-            ),
-            lines=5,
-            info=(
-                "Used only when the checkbox is selected. Static readable text is "
-                "downloaded and saved locally before indexing."
-            ),
-        )
+        with gr.Row():
+            with gr.Column(scale=1, min_width=320):
+                gr.Markdown("#### Web-page corpus")
+                with gr.Group():
+                    use_url_corpus = gr.Checkbox(
+                        value=False,
+                        label="Build the corpus from web-page URLs",
+                        info=(
+                            "Select this for URL pages. Leave it unchecked for the "
+                            "local text-file or PDF mode."
+                        ),
+                    )
+                    url_text = gr.Textbox(
+                        label="HTML page URLs (one per line)",
+                        placeholder=(
+                            "https://example.org/page-one\n"
+                            "https://example.org/page-two"
+                        ),
+                        lines=5,
+                        info=(
+                            "Used only when the checkbox is selected. Static "
+                            "headings, lists, paragraphs, and tables are saved "
+                            "locally before indexing."
+                        ),
+                    )
+
+            with gr.Column(scale=1, min_width=320):
+                gr.Markdown("#### PDF corpus")
+                with gr.Group():
+                    use_pdf_corpus = gr.Checkbox(
+                        value=False,
+                        label="Build the corpus from uploaded PDF documents",
+                        info=(
+                            "Select either URL mode or PDF mode. When both are "
+                            "unchecked, the configured local text file is used."
+                        ),
+                    )
+                    pdf_files = gr.File(
+                        label="PDF documents",
+                        file_count="multiple",
+                        file_types=[".pdf"],
+                        type="filepath",
+                    )
 
     query = gr.Textbox(
         label="Question",
@@ -243,7 +279,16 @@ with gr.Blocks(title="Compare Three RAG Systems") as demo:
 
     build_button.click(
         build_indexes,
-        inputs=[knn_k, ket_k, beta, tau, use_url_corpus, url_text],
+        inputs=[
+            knn_k,
+            ket_k,
+            beta,
+            tau,
+            use_url_corpus,
+            url_text,
+            use_pdf_corpus,
+            pdf_files,
+        ],
         outputs=[status, compare_button],
     )
 
@@ -257,6 +302,8 @@ with gr.Blocks(title="Compare Three RAG Systems") as demo:
         tau,
         use_url_corpus,
         url_text,
+        use_pdf_corpus,
+        pdf_files,
     ):
         index_control.change(
             disable_compare,
@@ -277,6 +324,8 @@ with gr.Blocks(title="Compare Three RAG Systems") as demo:
             theta,
             use_url_corpus,
             url_text,
+            use_pdf_corpus,
+            pdf_files,
         ],
         outputs=[text_answer, knn_answer, ket_answer, diagnostics],
     )

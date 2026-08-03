@@ -9,9 +9,10 @@ This annotated Python research prototype compares:
 3. **KET-RAG** — A simplified implementation of Huang, Zhang, and Xiao’s approach, combining an entity/relation skeleton with a keyword–subchunk bipartite graph. See BibTeX citation below.
 
 By default, the corpus is the configured text file in `data/`. The UI can also
-build a corpus from a user-supplied list of HTML page URLs. Index artifacts are
-stored under `.rag_cache/` and reused whenever the corpus content, model,
-chunking, and graph parameters match.
+build a structured corpus from a user-supplied list of HTML page URLs or
+uploaded PDF documents. Index artifacts are stored under `.rag_cache/` and
+reused whenever the corpus content, model, chunking, and graph parameters
+match.
 
 ## Setup
 
@@ -31,7 +32,8 @@ Optional model/index settings are `EMBEDDING_MODEL`, `GENERATION_MODEL`,
 `EXTRACTION_MODEL`, `EMBEDDING_DIMENSIONS`, `CHUNK_WORDS`, `CHUNK_OVERLAP`,
 `EMBED_BATCH_SIZE`, `EMBED_BATCH_DELAY`, and `EXTRACTION_BATCH_SIZE`. Optional
 URL-corpus settings are `URL_CORPUS_DIR`, `MAX_URL_PAGES`,
-`URL_TIMEOUT_SECONDS`, and `MAX_URL_PAGE_BYTES`.
+`URL_TIMEOUT_SECONDS`, and `MAX_URL_PAGE_BYTES`. PDF-corpus settings are
+`PDF_CORPUS_DIR`, `MAX_PDF_FILES`, and `MAX_PDF_FILE_BYTES`.
 
 The defaults are `gemini-embedding-001` at 768 dimensions and
 `gemini-3.1-flash-lite` for inexpensive graph extraction and answering.
@@ -53,16 +55,23 @@ until the selected corpus and graph indexes have been built or loaded
 successfully. Changing an index-defining corpus or graph control disables it
 again until the matching indexes are ready.
 
-The **Data corpus** panel provides two modes:
+The **Data corpus** panel provides three mutually exclusive modes:
 
-1. Leave **Build the corpus from web-page URLs** unchecked to use the configured
-   local text file exactly as before.
-2. Select the checkbox and paste one complete `http://` or `https://` URL per
+1. Leave both source checkboxes unchecked to use the configured local text
+   file.
+2. Select **Build the corpus from web-page URLs** and paste one complete
+   `http://` or `https://` URL per
    line to build the corpus from HTML pages. Clicking **Build/load indexes**
-   downloads every page, extracts its readable static text, combines the pages
-   in the displayed order, and saves `corpus.txt` and `sources.json` under
+   downloads every page, extracts its semantic structure, combines the pages
+   in the displayed order, and saves `corpus.txt`, `blocks.json`, and
+   `sources.json` under
    `data/url_corpora/<corpus-id>/`. All three RAG methods are then built and run
    over that saved corpus.
+3. Select **Build the corpus from uploaded PDF documents**, upload one or more
+   PDFs, and click **Build/load indexes**. The original PDFs are copied together
+   with `corpus.txt`, `blocks.json`, and `sources.json` under
+   `data/pdf_corpora/<corpus-id>/`. All three methods then use that structured
+   PDF corpus. URL mode and PDF mode cannot be selected together.
 
 URL corpora are content-addressed. If the downloaded and parsed pages are
 unchanged, the matching persistent indexes are reused; changed content selects
@@ -78,6 +87,46 @@ If any URL fails, the URL-corpus build stops rather than silently producing a
 partial corpus. Remote pages should also be treated as untrusted input: the
 prototype removes non-visible HTML elements, but it does not detect semantic
 prompt-injection text embedded in otherwise readable page content.
+
+### Structured text and table processing
+
+HTML and PDF adapters produce the same intermediate block representation for
+headings, paragraphs, lists, and tables. Each block retains source metadata;
+PDF blocks also retain their page number. HTML tables preserve captions,
+multi-row headers, and expanded `rowspan` and `colspan` cells. PDF tables are
+reconstructed from positioned text and detected cell boundaries using
+`pdfplumber`.
+
+Tables are serialized as explicit header-value relationships. For example, a
+row becomes `Parameter = Supply voltage; Minimum = 3.0; Maximum = 3.6; Unit = V`.
+Long tables are divided between complete rows instead of arbitrary words.
+Every resulting table chunk repeats its caption, section path, and column
+headers. KET-RAG's `tau` splitting also divides table chunks by complete rows,
+so a row is not broken between subchunks.
+
+If one serialized row is too wide for the configured chunk size, the table is
+divided into column groups. The first column is treated as the row identifier
+and repeated in every group so that values from later columns remain associated
+with the correct row. A single exceptionally long cell is retained intact even
+when it exceeds the target chunk size.
+
+Retrieved context labels include available document, page, table, and row-range
+metadata. The readable structured corpus is stored in `corpus.txt`, the full
+machine-readable representation in `blocks.json`, and source provenance in
+`sources.json`. The original uploaded PDF files are retained beside those
+artifacts.
+
+Existing plain-text indexes retain their previous cache identity and can still
+be loaded without rebuilding. URL indexes created by the earlier flat HTML
+parser must be built once in the new structured format, which can require new
+embedding and graph-extraction calls.
+
+PDF extraction currently targets text-based documents. A scanned image-only
+PDF requires OCR and is rejected when no readable text can be extracted. PDF
+table detection is heuristic: borderless tables, complicated merged cells,
+multi-column page layouts, and tables continued across pages may require more
+specialized layout analysis. The first non-empty detected PDF table row is
+treated as its column header.
 
 The first KET-RAG build can take several minutes because it extracts the
 skeleton graph and then embeds entities, relationships, subchunks, and
@@ -364,16 +413,16 @@ and interactive side-by-side research, comparison, and demonstration.
    2. cluster the containing sentences by meaning and create one vector for
       each cluster.
 
-5. **Static HTML extraction and source-aware retrieval**
+5. **Advanced document-layout extraction**
 
-   URL-corpus mode extracts readable text from the static HTML returned by each
-   server. It does not run JavaScript, crawl links, interpret a site's visual
-   layout, or remove every possible navigation and cookie-banner fragment.
-   Source URLs and page titles are saved in `sources.json`, but retrieval and
-   answer citations currently identify chunks rather than the originating web
-   pages. Future work could retain page boundaries during chunking, attach URL
-   metadata to every chunk, display page-level citations, and optionally use a
-   browser renderer for permitted JavaScript-dependent pages.
+   HTML mode retains semantic elements present in static HTML, but it does not
+   run JavaScript, crawl links, infer every CSS-grid layout, or remove every
+   navigation and cookie-banner fragment. PDF mode preserves detected tables
+   and page provenance but does not perform OCR, automatically merge continued
+   tables across pages, or fully reconstruct arbitrary visual layouts. Future
+   work could add a permitted browser renderer for JavaScript-dependent pages,
+   OCR for scanned PDFs, and a specialized document-layout/table-recognition
+   model for difficult specifications.
 
 ## KET-RAG reference
 

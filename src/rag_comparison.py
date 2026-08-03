@@ -8,6 +8,7 @@ from dataclasses import replace
 
 from .config import Settings
 from .gemini_api import Gemini
+from .pdf_corpus import parse_pdf_paths, pdf_request_key, prepare_pdf_corpus
 from .persistent_indexes import IndexStore
 from .retrieval_strategies import ket_retrieve, knn_retrieve, text_retrieve
 from .web_corpus import parse_url_list, prepare_web_corpus, url_request_key
@@ -38,6 +39,8 @@ class RagComparison:
         progress=None,
         use_url_corpus: bool = False,
         url_text: str = "",
+        use_pdf_corpus: bool = False,
+        pdf_files=None,
     ) -> str:
         """
         Build or load the indexes selected in the UI.
@@ -50,11 +53,15 @@ class RagComparison:
             progress: Optional callback accepting status strings.
             use_url_corpus: Whether to download and index the supplied pages.
             url_text: One HTTP(S) page URL per line when URL mode is enabled.
+            use_pdf_corpus: Whether to index the uploaded PDF documents.
+            pdf_files: Gradio PDF upload paths when PDF mode is enabled.
 
         Returns:
             A short readiness message containing chunk count and elapsed time.
         """
         started = time.perf_counter()
+        if use_url_corpus and use_pdf_corpus:
+            raise ValueError("Select either URL corpus mode or PDF corpus mode, not both.")
         if use_url_corpus:
             saved = prepare_web_corpus(
                 url_text,
@@ -64,11 +71,34 @@ class RagComparison:
                 self.settings.max_url_page_bytes,
                 progress,
             )
-            active_settings = replace(self.settings, data_file=saved.corpus_path)
+            active_settings = replace(
+                self.settings,
+                data_file=saved.corpus_path,
+                structured_blocks_file=saved.blocks_path,
+            )
             store = IndexStore(active_settings, self.gemini)
             corpus_selection = f"urls:{saved.request_key}"
             corpus_description = (
-                f"{saved.page_count} web page(s), saved in {saved.corpus_path.parent}"
+                f"{saved.source_count} web page(s), saved in {saved.corpus_path.parent}"
+            )
+        elif use_pdf_corpus:
+            saved = prepare_pdf_corpus(
+                pdf_files,
+                self.settings.pdf_corpus_dir,
+                self.settings.max_pdf_files,
+                self.settings.max_pdf_file_bytes,
+                progress,
+            )
+            active_settings = replace(
+                self.settings,
+                data_file=saved.corpus_path,
+                structured_blocks_file=saved.blocks_path,
+            )
+            store = IndexStore(active_settings, self.gemini)
+            corpus_selection = f"pdfs:{saved.request_key}"
+            corpus_description = (
+                f"{saved.source_count} PDF document(s), saved in "
+                f"{saved.corpus_path.parent}"
             )
         else:
             store = self.store
@@ -102,6 +132,8 @@ class RagComparison:
         theta: float,
         use_url_corpus: bool = False,
         url_text: str = "",
+        use_pdf_corpus: bool = False,
+        pdf_files=None,
     ):
         """
         Retrieve evidence and generate answers with all three RAG variants.
@@ -117,6 +149,8 @@ class RagComparison:
             theta: Share of KET's retrieval count assigned to the skeleton.
             use_url_corpus: Whether the current UI selection uses web pages.
             url_text: Current URL textbox value used to verify the loaded corpus.
+            use_pdf_corpus: Whether the current UI selection uses PDFs.
+            pdf_files: Current uploaded PDF paths used to verify the corpus.
 
         Returns:
             Four values: Text RAG answer, KNNG-RAG answer, KET-RAG answer, and
@@ -125,9 +159,18 @@ class RagComparison:
         if not query.strip():
             raise ValueError("Please enter a query.")
         requested = (int(knn_k), int(ket_k), round(float(beta), 4), int(tau))
+        if use_url_corpus and use_pdf_corpus:
+            raise ValueError("Select either URL corpus mode or PDF corpus mode, not both.")
         if use_url_corpus:
             urls = parse_url_list(url_text, self.settings.max_url_pages)
             corpus_selection = f"urls:{url_request_key(urls)}"
+        elif use_pdf_corpus:
+            paths = parse_pdf_paths(
+                pdf_files,
+                self.settings.max_pdf_files,
+                self.settings.max_pdf_file_bytes,
+            )
+            corpus_selection = f"pdfs:{pdf_request_key(paths)}"
         else:
             corpus_selection = f"file:{self.settings.data_file.resolve()}"
         if (
@@ -169,9 +212,31 @@ class RagComparison:
             "knng_rag_chunk_ids": knn_ids,
             "ket_rag": ket_details,
         }
+        def source_label(source: dict) -> str:
+            """
+            Format one KET source with document and table details.
+
+            Inputs:
+                source: Retrieved-source diagnostics dictionary.
+
+            Returns:
+                One bracketed human-readable source label.
+            """
+            parts = [
+                f"chunk {source['chunk_id']}",
+                f"subchunk {source['subchunk_id']}",
+            ]
+            for key in ("source_name", "page", "table_id"):
+                if source.get(key) not in (None, ""):
+                    parts.append(f"{key.replace('_', ' ')} {source[key]}")
+            if source.get("row_start") is not None:
+                parts.append(
+                    f"rows {source['row_start']}-{source.get('row_end', source['row_start'])}"
+                )
+            return "[" + ", ".join(parts) + "]"
+
         ket_sources = ", ".join(
-            f"[chunk {source['chunk_id']}, subchunk {source['subchunk_id']}]"
-            for source in ket_details["retrieved_sources"]
+            source_label(source) for source in ket_details["retrieved_sources"]
         ) or "(no text source retrieved)"
         ket_answer = f"Retrieved sources: {ket_sources}\n\n{answers[2]}"
         return answers[0], answers[1], ket_answer, diagnostics

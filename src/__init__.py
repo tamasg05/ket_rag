@@ -1,2 +1,2 @@
-"""Small, teaching-oriented RAG comparison package."""
+"""Readable research and demonstration package for comparing RAG methods."""
 

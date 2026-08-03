@@ -17,9 +17,13 @@ load_dotenv(ROOT / ".env")
 class Settings:
     """Environment-backed paths, model choices, and indexing parameters."""
     data_file: Path = ROOT / "data" / "TheProjectGutenbergeBookofTheAdventuresofSherlockHolmes.txt"
+    structured_blocks_file: Path | None = None
     cache_dir: Path = ROOT / ".rag_cache"
     url_corpus_dir: Path = Path(
         os.getenv("URL_CORPUS_DIR", str(ROOT / "data" / "url_corpora"))
+    )
+    pdf_corpus_dir: Path = Path(
+        os.getenv("PDF_CORPUS_DIR", str(ROOT / "data" / "pdf_corpora"))
     )
     google_api_key: str | None = os.getenv("GOOGLE_API_KEY")
 
@@ -27,6 +31,8 @@ class Settings:
     max_url_pages: int = int(os.getenv("MAX_URL_PAGES", "20"))
     url_timeout_seconds: float = float(os.getenv("URL_TIMEOUT_SECONDS", "20"))
     max_url_page_bytes: int = int(os.getenv("MAX_URL_PAGE_BYTES", "5000000"))
+    max_pdf_files: int = int(os.getenv("MAX_PDF_FILES", "10"))
+    max_pdf_file_bytes: int = int(os.getenv("MAX_PDF_FILE_BYTES", "50000000"))
 
     # Stable, inexpensive Google models. Change them in .env without editing code.
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")

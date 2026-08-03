@@ -1,200 +1,57 @@
-"""Download HTML pages and persist their readable text as one corpus."""
+"""Download HTML pages and convert their semantic structure into blocks."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
 
+from bs4 import BeautifulSoup, Tag
+
+from .structured_corpus import (
+    SavedStructuredCorpus,
+    clean_text,
+    make_table_block,
+    make_text_block,
+    render_block,
+    save_structured_corpus,
+)
+
+
 Progress = Callable[[str], None]
 _USER_AGENT = "ket-rag-comparison-prototype/1.0"
-_BLOCK_ELEMENTS = {
-    "address",
-    "article",
-    "aside",
-    "blockquote",
-    "br",
-    "div",
-    "footer",
+_REMOVED_TAGS = ["script", "style", "noscript", "template", "svg", "canvas", "form"]
+_CONTENT_TAGS = [
     "h1",
     "h2",
     "h3",
     "h4",
     "h5",
     "h6",
-    "header",
-    "li",
-    "main",
-    "nav",
     "p",
+    "ul",
+    "ol",
+    "blockquote",
     "pre",
-    "section",
     "table",
-    "td",
-    "th",
-    "tr",
-}
-_IGNORED_ELEMENTS = {
-    "canvas",
-    "form",
-    "noscript",
-    "script",
-    "style",
-    "svg",
-    "template",
-}
-
-
-class _ReadableHtmlParser(HTMLParser):
-    """Collect text from body, article, and main regions while parsing HTML."""
-
-    def __init__(self) -> None:
-        """
-        Initialize empty buffers and region-depth counters.
-
-        Inputs:
-            None.
-
-        Returns:
-            None. Parser state is initialized on this instance.
-        """
-        super().__init__(convert_charrefs=True)
-        self.title_parts: list[str] = []
-        self.body_parts: list[str] = []
-        self.article_parts: list[str] = []
-        self.main_parts: list[str] = []
-        self._depths = {"title": 0, "body": 0, "article": 0, "main": 0}
-        self._ignored_depth = 0
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        """
-        Track content regions and insert boundaries around block elements.
-
-        Inputs:
-            tag: Lower- or mixed-case HTML element name.
-            attrs: Attribute pairs supplied by ``HTMLParser``; not needed here.
-
-        Returns:
-            None. Parser state and text buffers are updated in place.
-        """
-        tag = tag.casefold()
-        if tag in _IGNORED_ELEMENTS:
-            self._ignored_depth += 1
-            return
-        if self._ignored_depth:
-            return
-        if tag in self._depths:
-            self._depths[tag] += 1
-        if tag in _BLOCK_ELEMENTS:
-            self._append("\n")
-
-    def handle_startendtag(self, tag: str, attrs) -> None:
-        """
-        Handle self-closing elements such as ``<br/>``.
-
-        Inputs:
-            tag: Self-closing HTML element name.
-            attrs: Attribute pairs supplied by ``HTMLParser``; not needed here.
-
-        Returns:
-            None. A block boundary may be appended to active buffers.
-        """
-        if tag.casefold() in _BLOCK_ELEMENTS and not self._ignored_depth:
-            self._append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        """
-        Close ignored/content regions and separate completed blocks.
-
-        Inputs:
-            tag: Closing HTML element name.
-
-        Returns:
-            None. Parser depths and text buffers are updated in place.
-        """
-        tag = tag.casefold()
-        if self._ignored_depth:
-            if tag in _IGNORED_ELEMENTS:
-                self._ignored_depth -= 1
-            return
-        if tag in _BLOCK_ELEMENTS:
-            self._append("\n")
-        if tag in self._depths and self._depths[tag] > 0:
-            self._depths[tag] -= 1
-
-    def handle_data(self, data: str) -> None:
-        """
-        Collect visible character data for every currently active region.
-
-        Inputs:
-            data: Decoded character data supplied by ``HTMLParser``.
-
-        Returns:
-            None. Visible data is appended to active buffers.
-        """
-        if not self._ignored_depth:
-            self._append(data)
-
-    def _append(self, value: str) -> None:
-        """
-        Append one value to all active region buffers.
-
-        Inputs:
-            value: Visible text or a block-boundary newline.
-
-        Returns:
-            None. Active buffers are updated in place.
-        """
-        if self._depths["title"]:
-            self.title_parts.append(value)
-        if self._depths["body"]:
-            self.body_parts.append(value)
-        if self._depths["article"]:
-            self.article_parts.append(value)
-        if self._depths["main"]:
-            self.main_parts.append(value)
-
-
-def _clean_html_parts(parts: Sequence[str]) -> str:
-    """
-    Normalize collected HTML text while preserving useful block boundaries.
-
-    Inputs:
-        parts: Text fragments and newlines emitted by the HTML parser.
-
-    Returns:
-        Cleaned readable text with one non-empty block per line.
-    """
-    joined = "".join(parts)
-    lines = [re.sub(r"\s+", " ", line).strip() for line in joined.splitlines()]
-    return "\n".join(line for line in lines if line)
+    "div",
+    "section",
+]
 
 
 @dataclass(frozen=True)
 class WebPage:
-    """Readable content and provenance for one downloaded HTML page."""
+    """Structured content and provenance for one downloaded HTML page."""
 
     requested_url: str
     final_url: str
     title: str
     text: str
-
-
-@dataclass(frozen=True)
-class SavedWebCorpus:
-    """Paths and identifiers for one materialized URL corpus."""
-
-    corpus_path: Path
-    sources_path: Path
-    request_key: str
-    content_key: str
-    page_count: int
+    blocks: tuple[dict, ...] = ()
 
 
 def parse_url_list(value: str, max_pages: int) -> list[str]:
@@ -246,23 +103,219 @@ def url_request_key(urls: Sequence[str]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
+def _positive_span(cell: Tag, attribute: str) -> int:
+    """
+    Read a positive HTML row/column span.
+
+    Inputs:
+        cell: Table header or data-cell element.
+        attribute: Either the ``rowspan`` or ``colspan`` attribute name.
+
+    Returns:
+        The positive span value, or one for an absent/invalid value.
+    """
+    try:
+        return max(1, int(cell.get(attribute, 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _extract_html_table(table: Tag) -> tuple[list[str], list[list[str]]]:
+    """
+    Expand one HTML table into unique headers and rectangular data rows.
+
+    Inputs:
+        table: Beautiful Soup ``table`` element.
+
+    Returns:
+        A pair containing normalized headers and rows with spans expanded.
+    """
+    grid: dict[tuple[int, int], str] = {}
+    header_flags: list[bool] = []
+    table_rows = table.find_all("tr")
+    for row_index, row in enumerate(table_rows):
+        cells = row.find_all(["th", "td"], recursive=False)
+        if not cells:
+            continue
+        header_flags.append(
+            row.find_parent("thead") is not None
+            or all(cell.name.casefold() == "th" for cell in cells)
+        )
+        column = 0
+        for cell in cells:
+            while (row_index, column) in grid:
+                column += 1
+            value = clean_text(cell.get_text(" ", strip=True))
+            rowspan = _positive_span(cell, "rowspan")
+            colspan = _positive_span(cell, "colspan")
+            for row_offset in range(rowspan):
+                for column_offset in range(colspan):
+                    grid[(row_index + row_offset, column + column_offset)] = value
+            column += colspan
+
+    if not grid:
+        return [], []
+    height = max(row for row, _ in grid) + 1
+    width = max(column for _, column in grid) + 1
+    rows = [
+        [grid.get((row, column), "") for column in range(width)]
+        for row in range(height)
+    ]
+
+    header_count = 0
+    for flag in header_flags:
+        if not flag:
+            break
+        header_count += 1
+    if header_count:
+        headers = []
+        for column in range(width):
+            levels: list[str] = []
+            for row in range(header_count):
+                value = rows[row][column]
+                if value and (not levels or levels[-1] != value):
+                    levels.append(value)
+            headers.append(" > ".join(levels))
+        data_rows = rows[header_count:]
+    else:
+        headers = [f"Column {column + 1}" for column in range(width)]
+        data_rows = rows
+    return headers, data_rows
+
+
+def extract_html_blocks(
+    html: str,
+    source_name: str,
+    source_url: str,
+) -> tuple[str, list[dict]]:
+    """
+    Extract semantic text, list, heading, and table blocks from static HTML.
+
+    Inputs:
+        html: Decoded HTML source.
+        source_name: Fallback name for the page.
+        source_url: Final page URL stored as provenance.
+
+    Returns:
+        The HTML title and ordered common-representation blocks.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for element in soup(_REMOVED_TAGS):
+        element.decompose()
+    title = clean_text(soup.title.get_text(" ", strip=True)) if soup.title else ""
+    document_name = title or source_name
+    root = soup.find("main") or soup.find("article") or soup.body or soup
+    blocks: list[dict] = []
+    headings: list[str] = []
+    table_number = 0
+
+    if title:
+        blocks.append(
+            make_text_block(
+                title,
+                document_name,
+                source_url,
+                block_type="heading",
+            )
+        )
+
+    for element in root.find_all(_CONTENT_TAGS):
+        if element.name != "table" and element.find_parent("table") is not None:
+            continue
+        if element.name in {"ul", "ol"} and element.find_parent(["ul", "ol"]):
+            continue
+        if element.name in {"div", "section"} and element.find(
+            _CONTENT_TAGS, recursive=True
+        ):
+            continue
+
+        if element.name in {f"h{level}" for level in range(1, 7)}:
+            text = clean_text(element.get_text(" ", strip=True))
+            if not text:
+                continue
+            level = int(element.name[1])
+            headings = headings[: level - 1]
+            headings.append(text)
+            blocks.append(
+                make_text_block(
+                    text,
+                    document_name,
+                    source_url,
+                    heading_path=headings[:-1],
+                    block_type="heading",
+                )
+            )
+            continue
+
+        if element.name == "table":
+            headers, rows = _extract_html_table(element)
+            if not rows:
+                continue
+            table_number += 1
+            caption_element = element.find("caption")
+            caption = (
+                clean_text(caption_element.get_text(" ", strip=True))
+                if caption_element
+                else ""
+            )
+            blocks.append(
+                make_table_block(
+                    headers,
+                    rows,
+                    document_name,
+                    table_id=f"html-table-{table_number}",
+                    caption=caption,
+                    source_url=source_url,
+                    heading_path=headings,
+                )
+            )
+            continue
+
+        if element.name in {"ul", "ol"}:
+            items = [
+                clean_text(item.get_text(" ", strip=True))
+                for item in element.find_all("li", recursive=False)
+            ]
+            marker = "1." if element.name == "ol" else "-"
+            text = " ".join(
+                f"{number}. {item}" if marker == "1." else f"- {item}"
+                for number, item in enumerate(items, start=1)
+                if item
+            )
+            block_type = "list"
+        else:
+            text = clean_text(element.get_text(" ", strip=True))
+            block_type = "paragraph"
+        if text:
+            blocks.append(
+                make_text_block(
+                    text,
+                    document_name,
+                    source_url,
+                    heading_path=headings,
+                    block_type=block_type,
+                )
+            )
+
+    if not blocks:
+        fallback = clean_text(root.get_text(" ", strip=True))
+        if fallback:
+            blocks.append(make_text_block(fallback, document_name, source_url))
+    return title, blocks
+
+
 def extract_html_text(html: str) -> tuple[str, str]:
     """
-    Extract a page title and readable static text from HTML.
+    Extract a title and readable structured serialization from HTML.
 
     Inputs:
         html: Decoded HTML source.
 
     Returns:
-        A pair containing the cleaned title and visible page text.
+        A title and text pair retained for simple callers and tests.
     """
-    parser = _ReadableHtmlParser()
-    parser.feed(html)
-    parser.close()
-    title = re.sub(r"\s+", " ", "".join(parser.title_parts)).strip()
-    # Prefer explicitly marked main content, then article content, then body.
-    selected = parser.main_parts or parser.article_parts or parser.body_parts
-    return title, _clean_html_parts(selected)
+    title, blocks = extract_html_blocks(html, "HTML page", "")
+    return title, "\n".join(render_block(block) for block in blocks)
 
 
 def fetch_html_pages(
@@ -272,13 +325,13 @@ def fetch_html_pages(
     progress: Progress | None = None,
 ) -> list[WebPage]:
     """
-    Download and parse a validated collection of static HTML pages.
+    Download and structurally parse validated static HTML pages.
 
     Inputs:
         urls: HTTP(S) page URLs to download.
         timeout_seconds: Per-request network timeout.
         max_page_bytes: Maximum response bytes accepted for one page.
-        progress: Optional callback accepting human-readable status messages.
+        progress: Optional callback accepting status messages.
 
     Returns:
         Parsed pages in the same order as ``urls``.
@@ -312,73 +365,64 @@ def fetch_html_pages(
         except Exception as exc:
             raise RuntimeError(f"Could not read {url}: {exc}") from exc
 
-        title, text = extract_html_text(payload.decode(encoding, errors="replace"))
-        if not text:
+        try:
+            decoded = payload.decode(encoding, errors="replace")
+        except LookupError:
+            decoded = payload.decode("utf-8", errors="replace")
+        title, blocks = extract_html_blocks(decoded, url, final_url)
+        if not blocks:
             raise ValueError(
-                f"No readable static text was found at {url}. "
+                f"No readable static content was found at {url}. "
                 "The page may require JavaScript."
             )
-        pages.append(WebPage(url, final_url, title, text))
+        text = "\n".join(render_block(block) for block in blocks)
+        pages.append(WebPage(url, final_url, title, text, tuple(blocks)))
         if progress:
             progress(f"Downloaded web pages: {number}/{total} completed")
     return pages
 
 
-def save_web_corpus(pages: Sequence[WebPage], root: Path) -> SavedWebCorpus:
+def save_web_corpus(
+    pages: Sequence[WebPage], root: Path
+) -> SavedStructuredCorpus:
     """
-    Materialize parsed pages as one text corpus plus source metadata.
+    Materialize parsed web pages as a common structured corpus.
 
     Inputs:
         pages: Downloaded pages in corpus order.
         root: Parent directory for content-addressed URL corpora.
 
     Returns:
-        Corpus paths, URL-selection key, content key, and page count.
+        Paths and identifiers for the saved structured corpus.
     """
     if not pages:
         raise ValueError("Cannot save an empty web corpus.")
-
-    urls = [page.requested_url for page in pages]
-    source_records = [
-        {
-            "page": number,
-            "requested_url": page.requested_url,
-            "final_url": page.final_url,
-            "title": page.title,
-            "characters": len(page.text),
-        }
-        for number, page in enumerate(pages, start=1)
-    ]
-    # Put each page title before its body without artificial labels such as
-    # "WEB PAGE" or "TITLE"; repeated labels would pollute lexical retrieval.
-    corpus_sections = [
-        "\n".join(part for part in (page.title, page.text) if part)
-        for page in pages
-    ]
-    corpus_text = "\n\n".join(corpus_sections).strip() + "\n"
-    content_key = hashlib.sha256(corpus_text.encode("utf-8")).hexdigest()[:16]
-    request_key = url_request_key(urls)
-    corpus_id = hashlib.sha256(
-        f"{request_key}|{content_key}".encode("utf-8")
-    ).hexdigest()[:16]
-    corpus_dir = root / corpus_id
-    corpus_path = corpus_dir / "corpus.txt"
-    sources_path = corpus_dir / "sources.json"
-    corpus_dir.mkdir(parents=True, exist_ok=True)
-    temporary_corpus = corpus_path.with_suffix(".txt.tmp")
-    temporary_sources = sources_path.with_suffix(".json.tmp")
-    temporary_corpus.write_text(corpus_text, encoding="utf-8")
-    temporary_sources.write_text(
-        json.dumps(source_records, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    temporary_corpus.replace(corpus_path)
-    temporary_sources.replace(sources_path)
-    return SavedWebCorpus(
-        corpus_path=corpus_path,
-        sources_path=sources_path,
-        request_key=request_key,
-        content_key=content_key,
-        page_count=len(pages),
+    blocks: list[dict] = []
+    sources: list[dict] = []
+    for page_number, page in enumerate(pages, start=1):
+        page_blocks = list(page.blocks) or [
+            make_text_block(
+                " ".join(part for part in (page.title, page.text) if part),
+                page.title or page.final_url,
+                page.final_url,
+            )
+        ]
+        blocks.extend(page_blocks)
+        sources.append(
+            {
+                "source": page_number,
+                "kind": "html",
+                "requested_url": page.requested_url,
+                "final_url": page.final_url,
+                "title": page.title,
+                "characters": len(page.text),
+            }
+        )
+    return save_structured_corpus(
+        blocks,
+        sources,
+        root,
+        url_request_key([page.requested_url for page in pages]),
     )
 
 
@@ -389,9 +433,9 @@ def prepare_web_corpus(
     timeout_seconds: float,
     max_page_bytes: int,
     progress: Progress | None = None,
-) -> SavedWebCorpus:
+) -> SavedStructuredCorpus:
     """
-    Validate, download, parse, and persist a URL corpus.
+    Validate, download, parse, and persist a structured URL corpus.
 
     Inputs:
         value: Multiline URL textbox value.
@@ -402,7 +446,7 @@ def prepare_web_corpus(
         progress: Optional callback accepting status messages.
 
     Returns:
-        Description of the saved content-addressed corpus.
+        Description of the saved content-addressed structured corpus.
     """
     urls = parse_url_list(value, max_pages)
     pages = fetch_html_pages(urls, timeout_seconds, max_page_bytes, progress)
