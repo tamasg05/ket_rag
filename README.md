@@ -1,6 +1,6 @@
 # Comparing Three RAG Approaches: A Python Prototype
 
-This annotated Python prototype compares:
+This annotated Python research prototype compares:
 
 1. **Text RAG** — global semantic search.
 2. **KNNG-RAG** — semantic seeds followed by one-hop expansion in a hybrid
@@ -89,10 +89,13 @@ python -m unittest discover -s src/tests -v
 
 ## Prototype scope
 
-This is a readable local-search demonstration, not a production GraphRAG
-system. The prototype uses chunk counts instead of the paper’s token budget and 
-simplifies knowledge-graph retrieval. It is a demonstration-oriented adaptation 
-of Algorithms 3 and 4 of Huang, Zhang, and Xiao (see BibTeX citation below).
+This is a readable research, comparison, and local-search prototype, not a
+production GraphRAG system. It supports experimentation with three retrieval
+methods while keeping the implementation extensively annotated for easier
+understanding and adaptation. The prototype uses chunk counts instead of the
+paper’s token budget and simplifies knowledge-graph retrieval. It is a
+demonstration-oriented adaptation of Algorithms 3 and 4 of Huang, Zhang, and
+Xiao (see BibTeX citation below).
 
 ## In line with the paper
 
@@ -122,7 +125,7 @@ The prototype implements the central elements of KET-RAG:
 | Sentence processing | Uses NLTK sentence tokenization in the experiments. | Uses NLTK Punkt configured for common English titles and abbreviations, and retains only sentence fragments containing at least three tokenized words. | Uncommon abbreviations may still produce inaccurate boundaries, and shorter fragments do not contribute to keyword vectors. |
 | Initial chunks | Uses token-based chunks in the experiments. | Uses 450 word tokens with a 60-word overlap by default. Surrounding punctuation is removed from the word tokens, so `Hello, World!` becomes `Hello` and `World`; case and internal apostrophes are preserved. | The tokenizer, repeated content, and different chunk boundaries can change co-occurrence, PageRank, sentence averages, and retrieval rankings. |
 | Models | Uses GPT-4o-mini and `text-embedding-3-small` in the experiments. | Uses `gemini-3.1-flash-lite` and `gemini-embedding-001` by default. | Retrieval, extraction, multilingual behaviour, cost, and answer style may differ from the paper's results. |
-| Evaluation | Evaluates benchmark datasets containing thousands of paragraphs and 500 questions per dataset. | Uses one Sherlock Holmes book and manual demonstration queries. | The paper's reported accuracy and cost improvements cannot be attributed directly to this prototype. |
+| Evaluation | Evaluates benchmark datasets containing thousands of paragraphs and 500 questions per dataset. | Supports interactive comparative experiments over a selected corpus and query set, but does not include an equivalent benchmark evaluation. | The paper's reported accuracy and cost improvements cannot be attributed directly to this prototype. |
 
 ## Default parameter differences
 
@@ -130,11 +133,139 @@ The prototype implements the central elements of KET-RAG:
 |---|---|---|---|
 | KNN graph `K` | `2` | `6` | The prototype creates a denser intermediate graph, which can change PageRank scores and core-chunk selection. |
 | Skeleton budget `beta` | `0.8` | `0.2` | The prototype sends 20% rather than 80% of chunks to entity and relationship extraction, reducing cost but also skeleton coverage. |
-| Per-chunk extraction ceiling | No fixed ceiling is specified | 20 entities and 30 relationships | The ceiling keeps the demonstration manageable but can omit less important graph facts from dense chunks. |
+| Per-chunk extraction ceiling | No fixed ceiling is specified | 20 entities and 30 relationships | The ceiling keeps the prototype manageable but can omit less important graph facts from dense chunks. |
 | Retrieval balance `theta` | `0.4` | `0.4` | Both target 40% of the retrieval budget for the skeleton channel and 60% for the keyword channel. |
 | Initial chunk size | 1,200 tokens in the low-cost configuration; 150 tokens in the high-accuracy configuration | 450 words with a 60-word overlap | Chunk boundaries and sizes differ substantially, affecting graph connections and retrieval granularity. |
 | Number of splits `tau` | `3` with 1,200-token chunks; `0` with 150-token chunks | `1` | The paper's two configurations both produce subchunks of approximately 150 tokens, while the prototype divides each chunk into two approximately equal parts. |
 | Retrieval limit | `lambda = 12,000` tokens | `top-k = 6` chunks or subchunks | The paper limits context by token length, while the prototype limits the number of selected text units. |
+
+## Comparison with the GraphRAG-based KET-RAG implementation
+
+Another public implementation is available in the
+[`waetr/KET-RAG`](https://github.com/waetr/KET-RAG) repository. In this
+section, it is called the **GraphRAG-based KET-RAG implementation** because it
+extends Microsoft GraphRAG 0.4.1. The code in the present repository is called
+the **comparison prototype**. These names distinguish the implementations
+without implying that either one reproduces every detail of the paper exactly.
+
+To keep the comparison reproducible as both repositories evolve, the
+observations in this section refer to these exact source revisions:
+
+- **GraphRAG-based KET-RAG implementation:**
+  [`c632ff4550446b05a608c56542c8cdb47679e12c`](https://github.com/waetr/KET-RAG/commit/c632ff4550446b05a608c56542c8cdb47679e12c)
+- **Comparison prototype:**
+  [`7ea6d9e325b9f446dc31b1c42f8e263d1100f541`](https://github.com/tamasg05/ket_rag/commit/7ea6d9e325b9f446dc31b1c42f8e263d1100f541)
+
+The GraphRAG-based KET-RAG implementation clearly targets the same KET-RAG
+paper: its README links to the paper, describes the KG skeleton and the
+text-keyword bipartite graph, and displays the architecture diagram used as
+Figure 1 in the paper. It is best understood as research and benchmark code,
+whereas the comparison prototype is an annotated research and demonstration
+application for experimenting with and comparing three retrieval approaches
+side by side. Its compact, extensively commented implementation is intended to
+make the algorithms and their differences easier to understand and modify.
+
+| Area | GraphRAG-based KET-RAG implementation | Comparison prototype |
+|---|---|---|
+| Main purpose | Research-oriented KET-RAG implementation and batch evaluation. | Research, experimentation, and readable interactive comparison of Text RAG, KNNG-RAG, and KET-RAG. |
+| Foundation | Extends the much larger Microsoft GraphRAG 0.4.1 codebase. | Small standalone Python application. |
+| Interface | Command-line indexing and batch-query scripts. | Gradio UI displaying the three answers and their retrieved contexts together. |
+| Models | Configured around OpenAI models, including GPT-4o-mini and `text-embedding-3-small`. | Uses Gemini Flash Lite and `gemini-embedding-001` by default. |
+| Persistence | Uses GraphRAG output files, Parquet, LanceDB, and FAISS indexes. | Uses JSON metadata and NumPy arrays under `.rag_cache/`; no database is required. |
+| Evaluation | Includes MuSiQue benchmark data and batch answer generation. | Supports interactive and manual comparison and has a small focused offline test suite. |
+| Retrieval limits | Uses token budgets, following the paper more closely. | Uses item counts controlled primarily by `top-k`. |
+| KNNG-RAG baseline | Builds a KNN graph internally for core selection but does not expose the same side-by-side KNNG-RAG baseline. | Exposes KNNG-RAG as one of the three directly comparable retrieval methods. |
+
+### Hybrid KNN graph construction
+
+The GraphRAG-based KET-RAG implementation divides text into smaller units
+before building its KNN graph. It selects lexical and semantic neighbours
+separately and stores their union in an undirected NetworkX graph. A node
+selected by both channels is not replaced, so the number of distinct selected
+neighbours can be smaller than the sum of the two channel limits. Because the
+graph is undirected, a node's final degree can also grow when other nodes
+select it.
+
+The comparison prototype builds the intermediate KNN graph over the original
+chunks, divides the total `k` between the lexical and semantic channels, and
+prevents a lexical neighbour from being selected again as a semantic
+neighbour. It retains each node's outgoing selections in a directed adjacency
+list. Its order of operations therefore follows Algorithm 3 more literally:
+construct the KNN graph over the initial chunks, use PageRank to select the
+core chunks, and then split the chunks into finer subchunks.
+
+### Skeleton graph and relationships
+
+The GraphRAG-based KET-RAG implementation uses Microsoft GraphRAG's richer
+knowledge-graph pipeline for entity and relationship extraction, description
+merging, graph tables, and entity-centred local search. This is more suitable
+for a large and complicated knowledge graph than the comparison prototype's
+compact entity and relationship records.
+
+There is, however, an important relationship-embedding difference. The
+GraphRAG codebase contains support for generating relationship-description
+embeddings, but they are not part of its default required embedding targets,
+and its query adapter reads relationships without loading a relationship
+embedding column. Its relationship retrieval therefore relies primarily on
+graph connectivity and stored relationship rank or weight.
+
+The comparison prototype always embeds relationship text, persists the
+vectors, and uses query-to-relationship cosine similarity to break ties after
+adjacency has been considered. This makes the use of relationship embeddings
+explicit, although semantic tie-breaking is an implementation choice beyond
+the adjacency ordering stated in Algorithm 2.
+
+### Keyword graph and keyword retrieval
+
+Both implementations create keyword-to-subchunk connections and represent a
+keyword by averaging the embeddings of sentences containing it. Their
+tokenization and vector handling differ:
+
+- The GraphRAG-based KET-RAG implementation retains all extracted non-stopword
+  tokens, does not impose the comparison prototype's two-subchunk minimum, and
+  does not explicitly normalize an averaged keyword vector before using an
+  inner-product FAISS index.
+- The comparison prototype case-folds keywords, keeps only keywords occurring
+  in at least two subchunks, and explicitly normalizes each averaged keyword
+  vector. It also configures NLTK sentence tokenization for common English
+  titles and abbreviations.
+
+The GraphRAG-based KET-RAG implementation follows Algorithm 4 with token
+budgets: the keyword channel first gathers approximately twice the permitted
+candidate content, reranks those candidates semantically, and retains content
+up to the final token budget. The comparison prototype follows the same
+two-stage candidate-and-rerank pattern using numbers of subchunks instead of
+token counts.
+
+### Fine-grained text units
+
+In the GraphRAG-based KET-RAG implementation, the keyword index is normally
+built from approximately 150-token units, while skeleton-context preparation
+contains a separate 300-token split. The two retrieval structures therefore
+do not necessarily refer to the same fine-grained text-unit collection.
+
+The comparison prototype uses one subchunk collection for both the skeleton
+and keyword structures. This is conceptually closer to Algorithm 3, but its
+simple rewiring associates an entity or relationship extracted from a parent
+chunk with every child subchunk of that parent. Some child associations can
+therefore be irrelevant.
+
+### Interpretation of the comparison
+
+The GraphRAG-based KET-RAG implementation is closer to the paper in its rich
+GraphRAG skeleton, token-budget retrieval, benchmark workflow, and overall
+research-system architecture. The comparison prototype follows some
+individual Algorithm 3 details more directly, including constructing the KNN
+graph before subchunking, avoiding duplicate lexical and semantic neighbour
+selections, sharing one subchunk collection between the two KET structures,
+and explicitly using relationship embeddings during retrieval.
+
+Consequently, the GraphRAG-based KET-RAG implementation should not be viewed
+simply as a more correct version of the comparison prototype. The two projects
+have different goals and make different trade-offs: the former favours a
+richer research and evaluation environment, while the latter favours
+readability, extensive annotation, persistence with minimal infrastructure,
+and interactive side-by-side research, comparison, and demonstration.
 
 ## Open Points and Further Work
 
@@ -181,7 +312,7 @@ The prototype implements the central elements of KET-RAG:
 
    The prototype does not use a database. It stores index metadata and graph
    mappings in JSON files and embedding arrays in NumPy files inside a
-   corpus-specific directory under `.rag_cache/`. This keeps the demonstration
+   corpus-specific directory under `.rag_cache/`. This keeps the prototype
    simple and allows completed indexing work to be reused, but it offers no
    database facilities for concurrent access, incremental updates, advanced
    queries, or management of very large indexes. A future production-oriented

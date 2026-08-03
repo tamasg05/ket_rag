@@ -3,8 +3,9 @@
 .venv/
 venv/
 
-# User specifications (both spellings are ignored)
+# Spec and presentation
 spec_demo.txt
+demo*
 
 
 # Persistent, reproducible RAG artifacts
