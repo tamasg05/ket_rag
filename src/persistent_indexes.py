@@ -12,7 +12,7 @@ import numpy as np
 from .config import Settings
 from .corpus_processing import (
     chunk_words,
-    load_book,
+    load_text_corpus,
     split_chunks_by_tau,
     split_sentences,
 )
@@ -157,9 +157,9 @@ class IndexStore:
             _say(progress, "Loaded persistent chunk embeddings")
             return _read_json(chunks_path), np.load(vectors_path)
 
-        _say(progress, "Chunking book")
+        _say(progress, "Chunking corpus")
         chunks = chunk_words(
-            load_book(self.settings.data_file),
+            load_text_corpus(self.settings.data_file),
             self.settings.chunk_words,
             self.settings.chunk_overlap,
         )

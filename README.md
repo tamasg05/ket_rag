@@ -8,9 +8,10 @@ This annotated Python research prototype compares:
    semantic neighbours).
 3. **KET-RAG** — A simplified implementation of Huang, Zhang, and Xiao’s approach, combining an entity/relation skeleton with a keyword–subchunk bipartite graph. See BibTeX citation below.
 
-The corpus is the text file in `data/`. Index artifacts are stored under
-`.rag_cache/` and reused whenever the corpus, model, chunking, and graph
-parameters match.
+By default, the corpus is the configured text file in `data/`. The UI can also
+build a corpus from a user-supplied list of HTML page URLs. Index artifacts are
+stored under `.rag_cache/` and reused whenever the corpus content, model,
+chunking, and graph parameters match.
 
 ## Setup
 
@@ -28,7 +29,9 @@ GOOGLE_API_KEY=your-key
 
 Optional model/index settings are `EMBEDDING_MODEL`, `GENERATION_MODEL`,
 `EXTRACTION_MODEL`, `EMBEDDING_DIMENSIONS`, `CHUNK_WORDS`, `CHUNK_OVERLAP`,
-`EMBED_BATCH_SIZE`, `EMBED_BATCH_DELAY`, and `EXTRACTION_BATCH_SIZE`.
+`EMBED_BATCH_SIZE`, `EMBED_BATCH_DELAY`, and `EXTRACTION_BATCH_SIZE`. Optional
+URL-corpus settings are `URL_CORPUS_DIR`, `MAX_URL_PAGES`,
+`URL_TIMEOUT_SECONDS`, and `MAX_URL_PAGE_BYTES`.
 
 The defaults are `gemini-embedding-001` at 768 dimensions and
 `gemini-3.1-flash-lite` for inexpensive graph extraction and answering.
@@ -45,7 +48,36 @@ address bar and open it. Choose the graph parameters and click **Build/load
 indexes**. The first build makes paid Gemini calls; later builds with the same
 inputs load local artifacts. Changing the corpus, tokenization, or indexing
 settings requires a new persistent index and new API calls. Then enter a
-question and click **Compare answers**.
+question and click **Compare answers**. The comparison button remains inactive
+until the selected corpus and graph indexes have been built or loaded
+successfully. Changing an index-defining corpus or graph control disables it
+again until the matching indexes are ready.
+
+The **Data corpus** panel provides two modes:
+
+1. Leave **Build the corpus from web-page URLs** unchecked to use the configured
+   local text file exactly as before.
+2. Select the checkbox and paste one complete `http://` or `https://` URL per
+   line to build the corpus from HTML pages. Clicking **Build/load indexes**
+   downloads every page, extracts its readable static text, combines the pages
+   in the displayed order, and saves `corpus.txt` and `sources.json` under
+   `data/url_corpora/<corpus-id>/`. All three RAG methods are then built and run
+   over that saved corpus.
+
+URL corpora are content-addressed. If the downloaded and parsed pages are
+unchanged, the matching persistent indexes are reused; changed content selects
+a new index. The downloader accepts at most 20 distinct URLs by default, only
+accepts HTML responses over HTTP(S), uses a 20-second timeout per page, and
+limits each response to 5,000,000 bytes. These limits can be changed through
+the URL-corpus environment settings listed above.
+
+The parser does not execute JavaScript. Pages whose main content is rendered
+only in the browser may yield no useful text and are rejected with an
+explanatory error. Only download and index pages that you are permitted to use.
+If any URL fails, the URL-corpus build stops rather than silently producing a
+partial corpus. Remote pages should also be treated as untrusted input: the
+prototype removes non-visible HTML elements, but it does not detect semantic
+prompt-injection text embedded in otherwise readable page content.
 
 The first KET-RAG build can take several minutes because it extracts the
 skeleton graph and then embeds entities, relationships, subchunks, and
@@ -331,6 +363,17 @@ and interactive side-by-side research, comparison, and demonstration.
    1. retain multiple contextual vectors for each keyword;
    2. cluster the containing sentences by meaning and create one vector for
       each cluster.
+
+5. **Static HTML extraction and source-aware retrieval**
+
+   URL-corpus mode extracts readable text from the static HTML returned by each
+   server. It does not run JavaScript, crawl links, interpret a site's visual
+   layout, or remove every possible navigation and cookie-banner fragment.
+   Source URLs and page titles are saved in `sources.json`, but retrieval and
+   answer citations currently identify chunks rather than the originating web
+   pages. Future work could retain page boundaries during chunking, attach URL
+   metadata to every chunk, display page-level citations, and optionally use a
+   browser renderer for permitted JavaScript-dependent pages.
 
 ## KET-RAG reference
 

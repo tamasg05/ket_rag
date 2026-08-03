@@ -45,7 +45,15 @@ def get_service() -> RagComparison:
     return service
 
 
-def build_indexes(knn_k, ket_k, beta, tau, progress=gr.Progress()):
+def build_indexes(
+    knn_k,
+    ket_k,
+    beta,
+    tau,
+    use_url_corpus,
+    url_text,
+    progress=gr.Progress(),
+):
     """
     Gradio callback that builds or loads the selected persistent indexes.
 
@@ -54,10 +62,13 @@ def build_indexes(knn_k, ket_k, beta, tau, progress=gr.Progress()):
         ket_k: KET-RAG neighbour slider value.
         beta: KET skeleton-fraction slider value.
         tau: KET subchunk-split slider value.
+        use_url_corpus: URL-corpus checkbox value.
+        url_text: Multiline URL textbox value.
         progress: Gradio progress reporter supplied by the framework.
 
     Returns:
-        A UI status string containing success details or the build error.
+        The UI status string and an update enabling the comparison button only
+        after a successful build/load.
     """
     messages: list[str] = []
 
@@ -83,13 +94,47 @@ def build_indexes(knn_k, ket_k, beta, tau, progress=gr.Progress()):
             progress(None, desc=message)
 
     try:
-        result = get_service().build(knn_k, ket_k, beta, tau, report)
-        return result + "\n" + "\n".join(messages[-4:])
+        result = get_service().build(
+            knn_k,
+            ket_k,
+            beta,
+            tau,
+            report,
+            bool(use_url_corpus),
+            url_text,
+        )
+        status = result + "\n" + "\n".join(messages[-4:])
+        return status, gr.update(interactive=True)
     except Exception as exc:
-        return f"Build failed: {type(exc).__name__}: {exc}"
+        status = f"Build failed: {type(exc).__name__}: {exc}"
+        return status, gr.update(interactive=False)
 
 
-def compare(query, top_k, temperature, knn_k, ket_k, beta, tau, theta):
+def disable_compare():
+    """
+    Disable comparison after an index-defining UI value changes.
+
+    Inputs:
+        None; this callback is triggered by corpus and graph controls.
+
+    Returns:
+        A Gradio component update that makes the comparison button inactive.
+    """
+    return gr.update(interactive=False)
+
+
+def compare(
+    query,
+    top_k,
+    temperature,
+    knn_k,
+    ket_k,
+    beta,
+    tau,
+    theta,
+    use_url_corpus,
+    url_text,
+):
     """
     Gradio callback that compares answers from the three loaded RAG systems.
 
@@ -102,30 +147,63 @@ def compare(query, top_k, temperature, knn_k, ket_k, beta, tau, theta):
         beta: KET skeleton-fraction slider value.
         tau: KET subchunk-split slider value.
         theta: KET skeleton-retrieval-share slider value.
+        use_url_corpus: URL-corpus checkbox value.
+        url_text: Multiline URL textbox value.
 
     Returns:
         Three answer strings and one retrieval-diagnostics dictionary.
     """
     try:
         return get_service().compare(
-            query, top_k, temperature, knn_k, ket_k, beta, tau, theta
+            query,
+            top_k,
+            temperature,
+            knn_k,
+            ket_k,
+            beta,
+            tau,
+            theta,
+            bool(use_url_corpus),
+            url_text,
         )
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
         return message, message, message, {"error": message}
 
 
-with gr.Blocks(title="Three RAG Systems — Sherlock Holmes") as demo:
+with gr.Blocks(title="Compare Three RAG Systems") as demo:
     gr.Markdown(
         """
         # Compare three RAG systems
-        Ask one question and compare answers grounded in *The Adventures of Sherlock Holmes*.
+        Ask one question and compare three answers grounded in the selected data corpus.
         Build once; matching persistent artifacts are reused on later runs.
         """
     )
+
+    with gr.Accordion("Data corpus", open=True):
+        use_url_corpus = gr.Checkbox(
+            value=False,
+            label="Build the corpus from web-page URLs",
+            info=(
+                "When unchecked, the configured local text file in data/ is used."
+            ),
+        )
+        url_text = gr.Textbox(
+            label="HTML page URLs (one per line)",
+            placeholder=(
+                "https://example.org/page-one\n"
+                "https://example.org/page-two"
+            ),
+            lines=5,
+            info=(
+                "Used only when the checkbox is selected. Static readable text is "
+                "downloaded and saved locally before indexing."
+            ),
+        )
+
     query = gr.Textbox(
         label="Question",
-        placeholder="For example: Why did Irene Adler keep the photograph?",
+        placeholder="For example: What are the main conclusions in the data?",
         lines=2,
     )
 
@@ -148,8 +226,12 @@ with gr.Blocks(title="Three RAG Systems — Sherlock Holmes") as demo:
             )
 
     with gr.Row():
-        build_button = gr.Button("Build/load indexes")
-        compare_button = gr.Button("Compare answers", variant="primary")
+        build_button = gr.Button(
+            "Build/load indexes", variant="primary", interactive=True
+        )
+        compare_button = gr.Button(
+            "Compare answers", variant="primary", interactive=False
+        )
     status = gr.Textbox(label="Index status", interactive=False, lines=2)
 
     with gr.Row():
@@ -161,12 +243,41 @@ with gr.Blocks(title="Three RAG Systems — Sherlock Holmes") as demo:
 
     build_button.click(
         build_indexes,
-        inputs=[knn_k, ket_k, beta, tau],
-        outputs=status,
+        inputs=[knn_k, ket_k, beta, tau, use_url_corpus, url_text],
+        outputs=[status, compare_button],
     )
+
+    # Once one of these values changes, the currently loaded index can no
+    # longer be assumed to match the UI selection. Query-only settings such as
+    # top-k, temperature, theta, and the question do not require rebuilding.
+    for index_control in (
+        knn_k,
+        ket_k,
+        beta,
+        tau,
+        use_url_corpus,
+        url_text,
+    ):
+        index_control.change(
+            disable_compare,
+            inputs=None,
+            outputs=compare_button,
+            queue=False,
+        )
     compare_button.click(
         compare,
-        inputs=[query, top_k, temperature, knn_k, ket_k, beta, tau, theta],
+        inputs=[
+            query,
+            top_k,
+            temperature,
+            knn_k,
+            ket_k,
+            beta,
+            tau,
+            theta,
+            use_url_corpus,
+            url_text,
+        ],
         outputs=[text_answer, knn_answer, ket_answer, diagnostics],
     )
 

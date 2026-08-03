@@ -37,7 +37,7 @@ _PUNKT_PARAMETERS.abbrev_types.update(
 _SENTENCE_TOKENIZER = PunktSentenceTokenizer(_PUNKT_PARAMETERS)
 
 
-def load_book(path: Path) -> str:
+def load_text_corpus(path: Path) -> str:
     """
     Load the UTF-8 text corpus.
 

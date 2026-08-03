@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 from .config import Settings
 from .gemini_api import Gemini
 from .persistent_indexes import IndexStore
 from .retrieval_strategies import ket_retrieve, knn_retrieve, text_retrieve
+from .web_corpus import parse_url_list, prepare_web_corpus, url_request_key
 
 
 class RagComparison:
@@ -27,7 +29,16 @@ class RagComparison:
         self.store = IndexStore(self.settings, self.gemini)
         self.loaded: dict | None = None
 
-    def build(self, knn_k: int, ket_k: int, beta: float, tau: int, progress=None) -> str:
+    def build(
+        self,
+        knn_k: int,
+        ket_k: int,
+        beta: float,
+        tau: int,
+        progress=None,
+        use_url_corpus: bool = False,
+        url_text: str = "",
+    ) -> str:
         """
         Build or load the indexes selected in the UI.
 
@@ -37,21 +48,47 @@ class RagComparison:
             beta: Fraction of chunks used for the KET skeleton.
             tau: Number of conceptual binary KET subchunk splits.
             progress: Optional callback accepting status strings.
+            use_url_corpus: Whether to download and index the supplied pages.
+            url_text: One HTTP(S) page URL per line when URL mode is enabled.
 
         Returns:
             A short readiness message containing chunk count and elapsed time.
         """
         started = time.perf_counter()
-        chunks, vectors, knn = self.store.ensure_knn(int(knn_k), progress)
-        ket = self.store.ensure_ket(int(ket_k), float(beta), int(tau), progress)
+        if use_url_corpus:
+            saved = prepare_web_corpus(
+                url_text,
+                self.settings.url_corpus_dir,
+                self.settings.max_url_pages,
+                self.settings.url_timeout_seconds,
+                self.settings.max_url_page_bytes,
+                progress,
+            )
+            active_settings = replace(self.settings, data_file=saved.corpus_path)
+            store = IndexStore(active_settings, self.gemini)
+            corpus_selection = f"urls:{saved.request_key}"
+            corpus_description = (
+                f"{saved.page_count} web page(s), saved in {saved.corpus_path.parent}"
+            )
+        else:
+            store = self.store
+            corpus_selection = f"file:{self.settings.data_file.resolve()}"
+            corpus_description = f"local file {self.settings.data_file.name}"
+
+        chunks, vectors, knn = store.ensure_knn(int(knn_k), progress)
+        ket = store.ensure_ket(int(ket_k), float(beta), int(tau), progress)
         self.loaded = {
             "parameters": (int(knn_k), int(ket_k), round(float(beta), 4), int(tau)),
+            "corpus_selection": corpus_selection,
             "chunks": chunks,
             "vectors": vectors,
             "knn": knn,
             "ket": ket,
         }
-        return f"Ready: {len(chunks)} chunks; indexes loaded in {time.perf_counter() - started:.1f}s."
+        return (
+            f"Ready: {len(chunks)} chunks from {corpus_description}; "
+            f"indexes loaded in {time.perf_counter() - started:.1f}s."
+        )
 
     def compare(
         self,
@@ -63,6 +100,8 @@ class RagComparison:
         beta: float,
         tau: int,
         theta: float,
+        use_url_corpus: bool = False,
+        url_text: str = "",
     ):
         """
         Retrieve evidence and generate answers with all three RAG variants.
@@ -76,6 +115,8 @@ class RagComparison:
             beta: KET skeleton fraction expected in the loaded index.
             tau: KET subchunk split count expected in the loaded index.
             theta: Share of KET's retrieval count assigned to the skeleton.
+            use_url_corpus: Whether the current UI selection uses web pages.
+            url_text: Current URL textbox value used to verify the loaded corpus.
 
         Returns:
             Four values: Text RAG answer, KNNG-RAG answer, KET-RAG answer, and
@@ -84,8 +125,19 @@ class RagComparison:
         if not query.strip():
             raise ValueError("Please enter a query.")
         requested = (int(knn_k), int(ket_k), round(float(beta), 4), int(tau))
-        if not self.loaded or self.loaded["parameters"] != requested:
-            raise RuntimeError("Build/load indexes for the selected graph parameters first.")
+        if use_url_corpus:
+            urls = parse_url_list(url_text, self.settings.max_url_pages)
+            corpus_selection = f"urls:{url_request_key(urls)}"
+        else:
+            corpus_selection = f"file:{self.settings.data_file.resolve()}"
+        if (
+            not self.loaded
+            or self.loaded["parameters"] != requested
+            or self.loaded["corpus_selection"] != corpus_selection
+        ):
+            raise RuntimeError(
+                "Build/load indexes for the selected corpus and graph parameters first."
+            )
 
         query_vector = self.gemini.embed_query(query)
         chunks = self.loaded["chunks"]

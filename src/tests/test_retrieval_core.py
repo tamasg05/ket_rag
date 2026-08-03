@@ -1,4 +1,9 @@
+import json
+import tempfile
 import unittest
+from email.message import Message
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -26,9 +31,95 @@ from src.retrieval_strategies import (
     serialise_subchunks,
     text_retrieve,
 )
+from src.web_corpus import (
+    WebPage,
+    extract_html_text,
+    fetch_html_pages,
+    parse_url_list,
+    save_web_corpus,
+    url_request_key,
+)
 
 
 class CoreTests(unittest.TestCase):
+    def test_html_page_download(self):
+        class FakeResponse:
+            def __init__(self):
+                self.headers = Message()
+                self.headers["Content-Type"] = "text/html; charset=utf-8"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exception_type, exception, traceback):
+                return False
+
+            def geturl(self):
+                return "https://example.org/final"
+
+            def read(self, limit):
+                return b"<html><body><main><p>Downloaded text.</p></main></body></html>"
+
+        with patch(
+            "src.web_corpus.urllib.request.urlopen", return_value=FakeResponse()
+        ):
+            pages = fetch_html_pages(
+                ["https://example.org/start"],
+                timeout_seconds=1,
+                max_page_bytes=1_000,
+            )
+        self.assertEqual(pages[0].final_url, "https://example.org/final")
+        self.assertEqual(pages[0].text, "Downloaded text.")
+
+    def test_url_list_validation_and_identity(self):
+        urls = parse_url_list(
+            "https://example.org/one\n\nhttps://example.org/two\n"
+            "https://example.org/one",
+            max_pages=2,
+        )
+        self.assertEqual(
+            urls, ["https://example.org/one", "https://example.org/two"]
+        )
+        self.assertEqual(url_request_key(urls), url_request_key(list(urls)))
+        with self.assertRaises(ValueError):
+            parse_url_list("file:///tmp/private.txt", max_pages=2)
+        with self.assertRaises(ValueError):
+            parse_url_list("https://user:secret@example.org", max_pages=2)
+
+    def test_html_extraction_and_corpus_persistence(self):
+        title, text = extract_html_text(
+            """
+            <html><head><title> Example   article </title>
+            <style>hidden style</style></head><body>
+            <nav>navigation</nav><main><h1>Visible heading</h1>
+            <p>First <strong>useful</strong> paragraph.</p>
+            <script>hidden script</script></main></body></html>
+            """
+        )
+        self.assertEqual(title, "Example article")
+        self.assertIn("Visible heading", text)
+        self.assertIn("First useful paragraph.", text)
+        self.assertNotIn("hidden", text)
+        self.assertNotIn("navigation", text)
+
+        pages = [
+            WebPage(
+                requested_url="https://example.org/article",
+                final_url="https://example.org/article",
+                title=title,
+                text=text,
+            )
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            saved = save_web_corpus(pages, Path(temporary))
+            self.assertTrue(saved.corpus_path.exists())
+            saved_text = saved.corpus_path.read_text(encoding="utf-8")
+            self.assertIn("Example article", saved_text)
+            self.assertNotIn("WEB PAGE", saved_text)
+            sources = json.loads(saved.sources_path.read_text(encoding="utf-8"))
+            self.assertEqual(sources[0]["requested_url"], pages[0].requested_url)
+            self.assertEqual(saved.page_count, 1)
+
     def test_word_tokenizer_removes_punctuation(self):
         self.assertEqual(
             tokenize_words("Hello, World! Isn't this Dr. Watson?"),
