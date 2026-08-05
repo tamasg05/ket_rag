@@ -73,6 +73,12 @@ The **Data corpus** panel provides three mutually exclusive modes:
    `data/pdf_corpora/<corpus-id>/`. All three methods then use that structured
    PDF corpus. URL mode and PDF mode cannot be selected together.
 
+PDF selections are identified from their ordered file bytes. After a PDF
+selection has been parsed once with the current extraction version, uploading
+the same files loads the saved `corpus.txt` and `blocks.json` directly. Because
+the same files therefore select the same `.rag_cache` directory, completed
+embeddings and graph indexes are reused instead of being paid for again.
+
 URL corpora are content-addressed. If the downloaded and parsed pages are
 unchanged, the matching persistent indexes are reused; changed content selects
 a new index. The downloader accepts at most 20 distinct URLs by default, only
@@ -95,7 +101,15 @@ headings, paragraphs, lists, and tables. Each block retains source metadata;
 PDF blocks also retain their page number. HTML tables preserve captions,
 multi-row headers, and expanded `rowspan` and `colspan` cells. PDF tables are
 reconstructed from positioned text and detected cell boundaries using
-`pdfplumber`.
+`pdfplumber`. When a detected PDF table omits an unruled edge column, the
+parser restores it from words aligned with the detected rows. It also infers
+column headers immediately above the detected grid and reads 90-degree table
+headings in their intended word order instead of emitting isolated letters.
+Side-by-side tables are kept separate. When one visually merged product row
+contains several aligned availability-and-price lines, those variants become
+separate logical rows with the product name and code repeated. Spaces used only
+as thousands separators are removed from extracted table numbers, so
+`1 000 760` is stored as `1000760`.
 
 Tables are serialized as explicit header-value relationships. For example, a
 row becomes `Parameter = Supply voltage; Minimum = 3.0; Maximum = 3.6; Unit = V`.
@@ -114,19 +128,25 @@ Retrieved context labels include available document, page, table, and row-range
 metadata. The readable structured corpus is stored in `corpus.txt`, the full
 machine-readable representation in `blocks.json`, and source provenance in
 `sources.json`. The original uploaded PDF files are retained beside those
-artifacts.
+artifacts. A PDF table's `bbox` value is `[x0, top, x1, bottom]`: the left,
+top, right, and bottom boundaries of the detected table in PDF points (1 point
+is 1/72 inch), measured from the page's left and top edges.
 
 Existing plain-text indexes retain their previous cache identity and can still
 be loaded without rebuilding. URL indexes created by the earlier flat HTML
 parser must be built once in the new structured format, which can require new
-embedding and graph-extraction calls.
+embedding and graph-extraction calls. PDF corpora created by an earlier table
+extraction version are assigned a new corpus identity; uploading the same PDF
+reparses it and builds the corrected index once, after which that version is
+reused persistently.
 
 PDF extraction currently targets text-based documents. A scanned image-only
 PDF requires OCR and is rejected when no readable text can be extracted. PDF
 table detection is heuristic: borderless tables, complicated merged cells,
 multi-column page layouts, and tables continued across pages may require more
-specialized layout analysis. The first non-empty detected PDF table row is
-treated as its column header.
+specialized layout analysis. The parser uses detected boundaries, row-aligned
+words, and nearby header text; it does not assume that the first detected data
+row is a column header.
 
 The first KET-RAG build can take several minutes because it extracts the
 skeleton graph and then embeds entities, relationships, subchunks, and

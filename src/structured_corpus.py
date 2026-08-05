@@ -184,6 +184,7 @@ def save_structured_corpus(
     sources: Sequence[dict],
     root: Path,
     request_key: str,
+    format_version: str = STRUCTURED_CORPUS_VERSION,
 ) -> SavedStructuredCorpus:
     """
     Persist structured blocks, readable text, and provenance metadata.
@@ -193,6 +194,7 @@ def save_structured_corpus(
         sources: Source-level provenance records.
         root: Parent directory for content-addressed corpora.
         request_key: Stable identifier for the selected URLs or PDF files.
+        format_version: Adapter-specific extraction-format version.
 
     Returns:
         Paths and identifiers for the saved structured corpus.
@@ -208,7 +210,7 @@ def save_structured_corpus(
     )
     content_key = hashlib.sha256(encoded_blocks.encode("utf-8")).hexdigest()[:16]
     corpus_id = hashlib.sha256(
-        f"{STRUCTURED_CORPUS_VERSION}|{request_key}|{content_key}".encode("utf-8")
+        f"{format_version}|{request_key}|{content_key}".encode("utf-8")
     ).hexdigest()[:16]
     corpus_dir = root / corpus_id
     corpus_path = corpus_dir / "corpus.txt"
