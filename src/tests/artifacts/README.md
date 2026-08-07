@@ -13,10 +13,13 @@ used to test complex, text-based PDF tables. It exercises:
 SHA-256:
 `e3bee2b41ea4a94a81496f2690a5e6cb67093e9bc5097f95a5e644d43da52451`
 
-The five public Opel price lists exercise a second PDF layout family. Their
-regression tests cover unruled leading columns, header rows located inside the
-detected table box, price normalization, trim/battery/range/price associations,
-and side-by-side technical-dimension tables.
+The five public Opel price lists are used to test a second PDF layout family:
+
+- unruled leading columns;
+- header rows located inside the detected table box;
+- price normalization;
+- associations among equipment levels, battery sizes, ranges, and prices; and
+- side-by-side technical-dimension tables.
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -26,11 +29,14 @@ and side-by-side technical-dimension tables.
 | `opel_HU_Mokka_Electric_MY25 1.pdf` | `9eb727bd60de74c6f403dede09fa4bc4cd4f5da215afd3f134b15ff798f75e5b` |
 | `opel_HU_Zafira_Electric.pdf` | `a16707fd6c126183b409d933f47a58e1c834f03070c93d2b2c8ba1638f483acf` |
 
-Five additional public Audi price lists exercise long documents containing
-repeated model, standard-equipment, and optional-equipment tables. Their
-regression tests verify the eight-column model-price structure, representative
-petrol, diesel, plug-in-hybrid, and electric rows, tables continued on a second
-price page, normalized prices, and the structured text supplied to RAG.
+Five additional public Audi price lists are used to test long documents:
+
+- repeated model, standard-equipment, and optional-equipment tables;
+- a consistent eight-column model-price structure;
+- representative petrol, diesel, plug-in-hybrid, and electric rows;
+- price tables continued on a second page;
+- price normalization; and
+- conversion of table rows into the structured text supplied to RAG.
 
 | Artifact | SHA-256 |
 | --- | --- |

@@ -133,7 +133,7 @@ Another RAG application can choose either representation for embedding.
    blindly across pages, tables, sources, or unrelated sections.
 
 4. **Propagate vertically merged labels to their logical rows.** Some tables
-   display a trim level or category once across several physical rows. The
+   display an equipment level or category once across several physical rows. The
    extractor should repeat that value in every resulting logical row so each
    row remains independently interpretable.
 
