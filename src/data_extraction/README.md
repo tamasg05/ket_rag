@@ -1,5 +1,10 @@
 # Data extraction and structure-aware chunking
 
+For PDF input, the package uses `pdfplumber`, an MIT-licensed low-level Python
+library for reading PDF text and layout geometry. This package extends that
+foundation with the structure-reconstruction functionality documented in section
+[How `pdfplumber` is used](#how-pdfplumber-is-used).
+
 The internal `data_extraction` package converts PDF documents or HTML pages
 into a common structured representation and can then turn the extracted blocks
 into chunks suitable for RAG applications. The common representation allows a
@@ -62,6 +67,33 @@ chunks = build_chunks(
 content-addressed corpus directory. For PDF input, the source files are copied
 under its `sources/` subdirectory. `build_chunks()` accepts either a block list
 or a path to `blocks.json` and can optionally persist `chunks.json`.
+
+## How `pdfplumber` is used
+
+`pdfplumber` is the package's low-level PDF-reading and layout-analysis
+library. It opens each document, iterates over its pages, and supplies:
+
+- words and their page coordinates;
+- information about upright and rotated text;
+- detected table boundaries, rows, columns, cells, and ruling lines;
+- page dimensions and other page-level information; and
+- duplicate-character removal through `dedupe_chars()`.
+
+The package's own extraction code then interprets this geometric information.
+It recovers omitted unruled columns, separates side-by-side tables,
+reconstructs headers and logical rows, handles selected visually merged rows,
+removes spaces used as thousands separators from prices, and creates the
+structured records in `blocks.json`.
+
+In other words, `pdfplumber` provides text and layout coordinates; it does not
+understand their semantic meaning. It cannot determine by itself that a range,
+battery size, and price belong to the same vehicle version. Those associations
+are reconstructed by this package's layout heuristics.
+
+`pdfplumber` does not perform optical character recognition (OCR). A scanned
+PDF containing page images but no usable text layer will therefore provide
+little or no extractable text. Supporting such documents would require a
+separate OCR stage before structure reconstruction.
 
 ## Chunk-size interpretation
 

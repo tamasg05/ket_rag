@@ -17,7 +17,7 @@ The five public Opel price lists are used to test a second PDF layout family:
 
 - unruled leading columns;
 - header rows located inside the detected table box;
-- price normalization;
+- removal of spaces used as thousands separators in prices;
 - associations among equipment levels, battery sizes, ranges, and prices; and
 - side-by-side technical-dimension tables.
 
@@ -35,7 +35,7 @@ Five additional public Audi price lists are used to test long documents:
 - a consistent eight-column model-price structure;
 - representative petrol, diesel, plug-in-hybrid, and electric rows;
 - price tables continued on a second page;
-- price normalization; and
+- removal of spaces used as thousands separators in prices; and
 - conversion of table rows into the structured text supplied to RAG.
 
 | Artifact | SHA-256 |

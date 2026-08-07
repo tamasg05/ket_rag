@@ -248,9 +248,10 @@ python -m unittest discover -s src/tests -v
 The repository includes the user-provided Audi A8 PDF under
 `src/tests/artifacts/` as a real-document regression fixture. Its tests cover
 multiple tables on one page, side-by-side tables, rotated headers, missing
-unruled edge columns, multi-price physical rows, number normalization, and
-structure-aware chunking. The PDF is parsed once per test run and requires no
-Gemini API calls. Confirm redistribution permission for third-party fixtures
+unruled edge columns, multi-price physical rows, removal of spaces used as
+thousands separators in prices, and structure-aware chunking. The PDF is
+parsed once per test run and requires no Gemini API calls. Confirm
+redistribution permission for third-party fixtures
 before publishing the future standalone extraction library.
 
 ## Parameters
