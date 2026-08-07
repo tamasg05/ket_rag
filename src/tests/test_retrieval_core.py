@@ -9,9 +9,12 @@ from unittest.mock import patch
 import numpy as np
 
 from src.corpus_processing import (
-    chunk_words,
     split_chunks_by_tau,
     split_sentences,
+)
+from src.data_extraction import (
+    build_chunks,
+    chunk_words,
     tokenize_words,
 )
 from src.gemini_api import (
@@ -26,7 +29,16 @@ from src.graph_construction import (
     build_skeleton_graph,
     format_relationship_text,
 )
-from src.pdf_corpus import (
+from src.data_extraction.html_extractor import (
+    WebPage,
+    extract_html_blocks,
+    extract_html_text,
+    fetch_html_pages,
+    parse_url_list,
+    save_web_corpus,
+    url_request_key,
+)
+from src.data_extraction.pdf_extractor import (
     _clean_pdf_table,
     _reconstruct_pdf_table,
     _split_physical_table_row,
@@ -41,16 +53,6 @@ from src.retrieval_strategies import (
     serialise_subchunks,
     text_retrieve,
 )
-from src.web_corpus import (
-    WebPage,
-    extract_html_blocks,
-    extract_html_text,
-    fetch_html_pages,
-    parse_url_list,
-    save_web_corpus,
-    url_request_key,
-)
-from src.structured_corpus import chunk_structured_blocks
 
 
 class CoreTests(unittest.TestCase):
@@ -73,7 +75,8 @@ class CoreTests(unittest.TestCase):
                 return b"<html><body><main><p>Downloaded text.</p></main></body></html>"
 
         with patch(
-            "src.web_corpus.urllib.request.urlopen", return_value=FakeResponse()
+            "src.data_extraction.html_extractor.urllib.request.urlopen",
+            return_value=FakeResponse(),
         ):
             pages = fetch_html_pages(
                 ["https://example.org/start"],
@@ -152,7 +155,9 @@ class CoreTests(unittest.TestCase):
             table["headers"],
             ["Parameter", "Limits > Minimum", "Limits > Maximum"],
         )
-        chunks = chunk_structured_blocks([table], size=30, overlap=0)
+        chunks = build_chunks(
+            [table], strategy="words", chunk_size=30, chunk_overlap=0
+        )
         self.assertTrue(chunks)
         self.assertEqual(chunks[0]["block_type"], "table")
         self.assertIn("Parameter = Voltage", chunks[0]["source_text"])
@@ -168,7 +173,9 @@ class CoreTests(unittest.TestCase):
             [(1, 1), (2, 2)],
         )
 
-        wide_chunks = chunk_structured_blocks([table], size=12, overlap=0)
+        wide_chunks = build_chunks(
+            [table], strategy="words", chunk_size=12, chunk_overlap=0
+        )
         column_groups = {tuple(chunk["column_group"]) for chunk in wide_chunks}
         self.assertGreater(len(column_groups), 1)
         self.assertTrue(all(group[0] == "Parameter" for group in column_groups))
@@ -219,7 +226,7 @@ class CoreTests(unittest.TestCase):
             uploaded.write_bytes(b"%PDF-reusable-test")
             corpus_root = root / "corpora"
             with patch(
-                "src.pdf_corpus.extract_pdf_blocks",
+                "src.data_extraction.pdf_extractor.extract_pdf_blocks",
                 return_value=([block], source),
             ) as extract:
                 first = prepare_pdf_corpus(
@@ -336,6 +343,41 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rows, [["A8 55 TFSI", "4NC0DA24", "41256010"]])
         self.assertEqual(sections, [(20.0, "Hybrid")])
         self.assertEqual(len(consumed), len(words))
+
+    def test_pdf_geometry_infers_multiple_left_columns_and_embedded_header(self):
+        def word(text, x0, top, x1, bottom):
+            return {
+                "text": text,
+                "x0": x0,
+                "top": top,
+                "x1": x1,
+                "bottom": bottom,
+                "upright": True,
+            }
+
+        # Only the final price column has detected cell boundaries. The first
+        # two columns and the complete header row must be recovered from words.
+        table = SimpleNamespace(
+            bbox=(60, 0, 90, 20),
+            rows=[
+                SimpleNamespace(cells=[(60, 0, 80, 10)]),
+                SimpleNamespace(cells=[(60, 10, 80, 20)]),
+            ],
+        )
+        words = [
+            word("Model", 1, 1, 9, 8),
+            word("Version", 30, 1, 40, 8),
+            word("Price", 65, 1, 75, 8),
+            word("Astra", 1, 11, 9, 18),
+            word("GS", 30, 11, 40, 18),
+            word("100", 65, 11, 75, 18),
+        ]
+
+        headers, rows, sections, _ = _reconstruct_pdf_table(table, words)
+
+        self.assertEqual(headers, ["Model", "Version", "Price"])
+        self.assertEqual(rows, [["Astra", "GS", "100"]])
+        self.assertEqual(sections, [])
 
     def test_word_tokenizer_removes_punctuation(self):
         self.assertEqual(

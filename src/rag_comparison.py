@@ -7,11 +7,18 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 from .config import Settings
+from .data_extraction import extract_corpus
 from .gemini_api import Gemini
-from .pdf_corpus import parse_pdf_paths, pdf_request_key, prepare_pdf_corpus
+from .data_extraction.html_extractor import (
+    parse_url_list,
+    url_request_key,
+)
+from .data_extraction.pdf_extractor import (
+    parse_pdf_paths,
+    pdf_request_key,
+)
 from .persistent_indexes import IndexStore
 from .retrieval_strategies import ket_retrieve, knn_retrieve, text_retrieve
-from .web_corpus import parse_url_list, prepare_web_corpus, url_request_key
 
 
 class RagComparison:
@@ -63,13 +70,15 @@ class RagComparison:
         if use_url_corpus and use_pdf_corpus:
             raise ValueError("Select either URL corpus mode or PDF corpus mode, not both.")
         if use_url_corpus:
-            saved = prepare_web_corpus(
-                url_text,
+            urls = parse_url_list(url_text, self.settings.max_url_pages)
+            saved = extract_corpus(
+                urls,
                 self.settings.url_corpus_dir,
-                self.settings.max_url_pages,
-                self.settings.url_timeout_seconds,
-                self.settings.max_url_page_bytes,
-                progress,
+                source_type="html",
+                max_url_pages=self.settings.max_url_pages,
+                url_timeout_seconds=self.settings.url_timeout_seconds,
+                max_url_page_bytes=self.settings.max_url_page_bytes,
+                progress=progress,
             )
             active_settings = replace(
                 self.settings,
@@ -82,12 +91,13 @@ class RagComparison:
                 f"{saved.source_count} web page(s), saved in {saved.corpus_path.parent}"
             )
         elif use_pdf_corpus:
-            saved = prepare_pdf_corpus(
+            saved = extract_corpus(
                 pdf_files,
                 self.settings.pdf_corpus_dir,
-                self.settings.max_pdf_files,
-                self.settings.max_pdf_file_bytes,
-                progress,
+                source_type="pdf",
+                max_pdf_files=self.settings.max_pdf_files,
+                max_pdf_file_bytes=self.settings.max_pdf_file_bytes,
+                progress=progress,
             )
             active_settings = replace(
                 self.settings,

@@ -11,10 +11,14 @@ import numpy as np
 
 from .config import Settings
 from .corpus_processing import (
-    chunk_words,
     load_text_corpus,
     split_chunks_by_tau,
     split_sentences,
+)
+from .data_extraction import (
+    STRUCTURED_CORPUS_VERSION,
+    build_chunks,
+    chunk_words,
 )
 from .gemini_api import Gemini, GraphExtractionError
 from .graph_construction import (
@@ -23,11 +27,6 @@ from .graph_construction import (
     build_skeleton_graph,
     format_relationship_text,
     select_core_chunks,
-)
-from .structured_corpus import (
-    STRUCTURED_CORPUS_VERSION,
-    chunk_structured_blocks,
-    load_structured_blocks,
 )
 
 
@@ -169,11 +168,11 @@ class IndexStore:
 
         if self.settings.structured_blocks_file:
             _say(progress, "Chunking structured corpus")
-            blocks = load_structured_blocks(self.settings.structured_blocks_file)
-            chunks = chunk_structured_blocks(
-                blocks,
-                self.settings.chunk_words,
-                self.settings.chunk_overlap,
+            chunks = build_chunks(
+                self.settings.structured_blocks_file,
+                strategy="words",
+                chunk_size=self.settings.chunk_words,
+                chunk_overlap=self.settings.chunk_overlap,
             )
         else:
             _say(progress, "Chunking text corpus")

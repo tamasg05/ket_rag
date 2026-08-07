@@ -10,7 +10,7 @@ import numpy as np
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
-from .corpus_processing import tokenize_words
+from .data_extraction import tokenize_words
 
 
 def top_indices(scores: np.ndarray, count: int) -> list[int]:

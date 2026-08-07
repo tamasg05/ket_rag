@@ -102,10 +102,13 @@ PDF blocks also retain their page number. HTML tables preserve captions,
 multi-row headers, and expanded `rowspan` and `colspan` cells. PDF tables are
 reconstructed from positioned text and detected cell boundaries using
 `pdfplumber`. When a detected PDF table omits an unruled edge column, the
-parser restores it from words aligned with the detected rows. It also infers
-column headers immediately above the detected grid and reads 90-degree table
-headings in their intended word order instead of emitting isolated letters.
-Side-by-side tables are kept separate. When one visually merged product row
+parser restores it from words aligned with the detected rows. It can also
+recover several unruled leading columns and promote a visible header row found
+inside the detected table box. Coincident duplicate PDF glyphs are removed
+before text reconstruction. The parser also infers column headers immediately
+above the detected grid and reads 90-degree table headings in their intended
+word order instead of emitting isolated letters. Side-by-side tables are kept
+separate. When one visually merged product row
 contains several aligned availability-and-price lines, those variants become
 separate logical rows with the product name and code repeated. Spaces used only
 as thousands separators are removed from extracted table numbers, so
@@ -131,6 +134,75 @@ machine-readable representation in `blocks.json`, and source provenance in
 artifacts. A PDF table's `bbox` value is `[x0, top, x1, bottom]`: the left,
 top, right, and bottom boundaries of the detected table in PDF points (1 point
 is 1/72 inch), measured from the page's left and top edges.
+
+### Internal data-extraction package
+
+Reusable extraction functionality is exposed through the internal
+`src.data_extraction` package. It is deliberately separated from the RAG
+retrieval code:
+
+- `blocks.py` defines block construction, validation, rendering, persistence,
+  and the independent `blocks.json` schema version;
+- `chunking.py` builds provenance-preserving ordinary text and structured
+  table chunks;
+- `html_extractor.py` exposes the HTML adapter API; and
+- `pdf_extractor.py` exposes the PDF adapter API.
+
+The current `blocks.json` schema version is `1.0`. A file contains an ordered
+JSON list of text or table blocks. Common fields record the block type, source,
+optional URL, optional one-based page number, and heading path. Table blocks
+also contain a stable table ID, caption, non-empty headers, rectangular string
+rows, and an optional four-number bounding box. Files are validated when saved
+or loaded. The schema version is independent of RAG index and extractor cache
+versions, so future Python and Java implementations can target the same block
+contract without coupling it to an embedding model.
+
+The package provides two high-level operations. `extract_corpus()` accepts an
+ordered collection containing either PDF paths or HTML URLs and creates a
+content-addressed directory containing `blocks.json`, `corpus.txt`, and
+`sources.json`. PDF originals are copied there as well. `build_chunks()` loads
+the extracted blocks and can save the resulting chunks as `chunks.json`:
+
+```python
+from pathlib import Path
+
+from src.data_extraction import build_chunks, extract_corpus
+
+corpus = extract_corpus(
+    [Path("specification.pdf")],
+    output_directory=Path("extracted"),
+)
+
+chunks = build_chunks(
+    corpus.blocks_path,
+    output_path=corpus.blocks_path.with_name("chunks.json"),
+    strategy="words",
+    chunk_size=450,
+    chunk_overlap=60,
+)
+```
+
+Only the explicit `words` strategy is currently implemented. Ordinary text is
+split into overlapping word ranges. Table chunks retain complete rows and can
+divide exceptionally wide tables into column groups while repeating the first
+identifier column. KET-RAG's additional `tau` subchunk construction remains in
+the prototype because it is specific to that retrieval algorithm rather than
+general data preparation.
+
+Every chunk contains both `text` and `source_text`. `text` is a predictable
+word-token representation without surrounding punctuation; it is useful for
+lexical processing and is also what this prototype currently embeds.
+`source_text` preserves punctuation, headings, and table header-value
+formatting and is supplied to the answering model. Removing punctuation is not
+inherently better for modern embedding models: punctuation and formatting can
+carry useful meaning. The library therefore retains both fields so another RAG
+project can choose which representation to embed. The prototype keeps using
+`text` for compatibility and consistency with its lexical and keyword
+processing.
+
+The adapter implementations remain inside this repository while their
+behaviour is tested and stabilized. This boundary is intended to make later
+extraction into a standalone Python library less disruptive.
 
 Existing plain-text indexes retain their previous cache identity and can still
 be loaded without rebuilding. URL indexes created by the earlier flat HTML
@@ -167,11 +239,19 @@ The optional CLI builder is:
 python -m src.build_indexes --knn-k 6 --ket-k 6 --beta 0.2 --tau 1
 ```
 
-Run the small offline test suite with:
+Run the offline test suite with:
 
 ```powershell
 python -m unittest discover -s src/tests -v
 ```
+
+The repository includes the user-provided Audi A8 PDF under
+`src/tests/artifacts/` as a real-document regression fixture. Its tests cover
+multiple tables on one page, side-by-side tables, rotated headers, missing
+unruled edge columns, multi-price physical rows, number normalization, and
+structure-aware chunking. The PDF is parsed once per test run and requires no
+Gemini API calls. Confirm redistribution permission for third-party fixtures
+before publishing the future standalone extraction library.
 
 ## Parameters
 
