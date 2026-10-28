@@ -1,0 +1,35 @@
+# Secrets and local environments
+.env
+.venv/
+venv/
+
+# Spec and presentation
+spec_demo.txt
+demo*
+
+
+# Persistent, reproducible RAG artifacts
+.rag_cache/
+data/url_corpora/
+data/pdf_corpora/
+
+# Python/tooling output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+*.log
+.rag_build.*
+.gradio.*

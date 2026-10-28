@@ -1,0 +1,8 @@
+google-genai>=1.30,<2
+gradio>=5.0,<7
+networkx>=3.2,<4
+nltk>=3.9,<4
+numpy>=1.26,<3
+python-dotenv>=1.0,<2
+scikit-learn>=1.4,<2
+table-aware-chunker @ git+https://github.com/tamasg05/table_aware_chunker.git@6b4477cbf3a823f0f4063e7f1fd99d52fa2511fa
